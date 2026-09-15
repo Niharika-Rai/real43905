@@ -161,11 +161,22 @@ pytest tests/
 
 ### Scheduled batch data refresh (MVP requirement)
 
-The charter's MVP scope calls for a scheduled batch data refresh. `render.yaml`
-includes an optional Render **Cron Job** (`metro-dataset-refresh`, weekly)
-that runs `ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset`. On Render's
-free tier, a cron job's filesystem is ephemeral and separate from the web
-service's, so to actually pick up a refreshed dataset you'll want one of:
+The charter's MVP scope calls for a scheduled batch data refresh. **Render
+Cron Jobs require a paid plan** (Starter or above) -- they are not available
+on the free plan -- so `render.yaml` ships with just the web service by
+default, to keep the app deployable for free. A commented-out
+`metro-dataset-refresh` cron job (weekly, runs
+`ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset`) is included in
+`render.yaml` for when you're ready to add it.
+
+If you're staying on the free plan, the simplest alternative is a scheduled
+**GitHub Action** that runs the same command and commits the refreshed
+`data/metro_dataset.csv`, which triggers a normal Render redeploy -- ask and
+I can set that up.
+
+Whichever mechanism runs it, a cron job's filesystem is ephemeral and
+separate from the web service's, so to actually pick up a refreshed dataset
+you'll want one of:
 
 - Commit the regenerated `data/metro_dataset.csv` back to the repo (e.g. the
   cron job opens a PR, or pushes directly with a deploy key) so the next web

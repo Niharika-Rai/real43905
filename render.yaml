@@ -13,21 +13,24 @@ services:
       - key: FRED_API_KEY
         sync: false
 
-  # Optional: weekly scheduled refresh of data/metro_dataset.csv from live
-  # sources (Census/ACS/Zillow/FHFA). Requires committing the regenerated
-  # CSV back to the repo, or writing to a persistent disk the web service
-  # also reads from -- see README "Scheduled batch refresh" for options.
-  - type: cron
-    name: metro-dataset-refresh
-    runtime: python
-    plan: free
-    schedule: "0 8 * * 1"
-    buildCommand: pip install -r requirements.txt
-    startCommand: ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset
-    envVars:
-      - key: PYTHON_VERSION
-        value: 3.11.15
-      - key: CENSUS_API_KEY
-        sync: false
-      - key: FRED_API_KEY
-        sync: false
+# Optional: a weekly scheduled refresh of data/metro_dataset.csv from live
+# sources (Census/ACS/Zillow/FHFA) can be added as a Render Cron Job -- see
+# README "Scheduled batch refresh". Render Cron Jobs require a paid plan
+# (Starter or above), so it's left out of this Blueprint by default to keep
+# the app deployable on the free plan. To add it, uncomment and add a
+# second entry under `services:` above:
+#
+#   - type: cron
+#     name: metro-dataset-refresh
+#     runtime: python
+#     plan: starter
+#     schedule: "0 8 * * 1"
+#     buildCommand: pip install -r requirements.txt
+#     startCommand: ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset
+#     envVars:
+#       - key: PYTHON_VERSION
+#         value: 3.11.15
+#       - key: CENSUS_API_KEY
+#         sync: false
+#       - key: FRED_API_KEY
+#         sync: false
