@@ -300,7 +300,7 @@ with tab_buydown:
     home_price = bc1.number_input("Home price ($)", min_value=50_000, max_value=3_000_000, value=350_000, step=5_000)
     down_pct = bc2.slider("Down payment (%)", 0, 50, 10)
     note_rate = bc3.number_input("Note rate (%)", min_value=0.0, max_value=15.0, value=6.5, step=0.125)
-    term_years = st.select_slider("Loan term (years)", options=[15, 20, 30], value=30)
+    term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
 
     principal = home_price * (1 - down_pct / 100)
     result = two_one_buydown(principal, note_rate, term_years)
