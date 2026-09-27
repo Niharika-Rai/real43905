@@ -82,13 +82,14 @@ Shortage/Feasibility/Opportunity scores for the four rings are z-scored
 set — they answer "which ring is relatively best to site in, within this
 metro," not "how does this ring compare to a different metro."
 
-Below the ring table/chart, the Metro Breakdown tab also plots a **state-level
-map** cropped around the selected metro (via `pipeline.subareas.ring_circle_points`)
-showing a star at the metro's center and the four rings as concentric shaded
-bands around it, colored by each ring's local Opportunity Score. Ring radii
-(8 / 20 / 40 / 70 miles) are fixed, stylized bands applied the same way to
-every metro -- they visualize "closer in vs. farther out," not a surveyed
-commute-shed or neighborhood boundary for any specific place.
+Below the ring table/chart, the Metro Breakdown tab also plots the metro's
+home state (drawn offline -- see `pipeline/geo_shapes.py`) with a star at
+the metro's center and the four rings as concentric shaded bands around it
+(via `pipeline.subareas.ring_circle_points`), colored by each ring's local
+Opportunity Score. Ring radii (8 / 20 / 40 / 70 miles) are fixed, stylized
+bands applied the same way to every metro -- they visualize "closer in vs.
+farther out," not a surveyed commute-shed or neighborhood boundary for any
+specific place.
 
 ## Data sources & what's synthetic
 
@@ -171,14 +172,17 @@ streamlit run app.py
 
 Then open the URL Streamlit prints (defaults to http://localhost:8501).
 
-**Note on the Map tab**: it renders a real U.S. basemap (land, state
-borders, coastlines) via Plotly's `scope="usa"` geo trace, which fetches
-basemap shapes from Plotly's public CDN (`cdn.plot.ly`) in the viewer's
-browser the first time the map loads. This works in any normal browser and
-on Render's default network; it will only fail to render if the viewer's
-own network blocks that CDN (e.g. a locked-down corporate proxy). If the
-map ever comes up blank for a viewer, that CDN reachability is the first
-thing to check.
+**Note on the maps**: both the national map and the per-metro state map
+render state boundaries from an **offline** shapefile (`cb_2016_us_state_500k`,
+bundled by the `plotly-geo` PyPI package) via `pipeline/geo_shapes.py`, not
+from Plotly's default `scope="usa"` geo trace. That default fetches basemap
+shapes from Plotly's public CDN (`cdn.plot.ly`) at render time, which failed
+outright in this project's restricted-egress dev sandbox and would fail the
+same way for any viewer whose network blocks that CDN (a locked-down
+corporate proxy, for instance). Building the state polygons from local
+shapefile data instead removes that dependency entirely -- neither map
+needs any network access to render. See `pipeline/geo_shapes.py` for how
+the shapefile is read and simplified.
 
 Run the test suite with:
 

@@ -2,4 +2,6 @@ streamlit==1.63.0
 pandas==3.0.5
 numpy==2.4.6
 plotly==7.0.0
+plotly-geo==1.0.0
+pyshp==3.1.6
 requests==2.34.2

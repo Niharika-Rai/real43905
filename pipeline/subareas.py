@@ -63,7 +63,12 @@ def ring_circle_points(center_lat: float, center_lon: float, radius_miles: float
     """
     lat_r = radius_miles / MILES_PER_DEGREE_LAT
     lon_r = radius_miles / (MILES_PER_DEGREE_LAT * max(0.15, math.cos(math.radians(center_lat))))
-    angles = np.linspace(0, 2 * math.pi, n)
+    # Plotly's Scattergeo fill="toself" is sensitive to winding direction
+    # under the mercator + lataxis/lonaxis-range combination used for the
+    # state-level ring map -- the "natural" (counterclockwise) order fills
+    # the circle's *exterior* instead of its interior, so this traces the
+    # ring clockwise.
+    angles = np.linspace(2 * math.pi, 0, n)
     lats = center_lat + lat_r * np.sin(angles)
     lons = center_lon + lon_r * np.cos(angles)
     return lats.tolist(), lons.tolist()

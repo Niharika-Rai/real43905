@@ -13,11 +13,11 @@ import os
 
 import pandas as pd
 import plotly.colors as pcolors
-import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from metros import metros_frame
+from pipeline.geo_shapes import state_rings, national_background_rings
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
 from pipeline.subareas import (
     generate_subarea_dataset,
@@ -37,13 +37,16 @@ from finance import two_one_buydown
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
-# shared geo basemap styling (used by both the national map and the
-# state-level sub-metro ring map)
-GEO_OCEAN_COLOR = "rgb(202, 227, 245)"
-GEO_LAND_COLOR = "rgb(247, 247, 244)"
-GEO_SUBUNIT_COLOR = "rgb(170, 170, 170)"
-GEO_COUNTRY_COLOR = "rgb(140, 140, 140)"
-GEO_COASTLINE_COLOR = "rgb(140, 140, 140)"
+# shared geo styling (used by both the national map and the state-level
+# sub-metro ring map): plain/transparent page background, land (states)
+# tinted a very light blue instead of grey, state lines in a medium grey
+# for contrast against the tint. Both maps draw their own state polygons
+# from offline shapefile data (pipeline/geo_shapes.py) rather than using
+# Plotly's built-in basemap layers, which require a CDN fetch at render
+# time -- see the comment on fig_geo.update_geos below for why.
+GEO_LAND_COLOR = "rgb(222, 235, 247)"
+GEO_BG_COLOR = "rgba(0,0,0,0)"
+GEO_SUBUNIT_COLOR = "rgb(140, 140, 140)"
 
 st.set_page_config(
     page_title="Affordable Housing Opportunity Explorer",
@@ -214,39 +217,44 @@ with tab_map:
         "Bubble size = population, color = Opportunity Score. Hover a metro "
         "for its score breakdown."
     )
-    fig = px.scatter_geo(
-        scored,
-        lat="lat",
-        lon="lon",
-        color="opportunity_score",
-        size="population",
-        hover_name="metro",
-        hover_data={
-            "opportunity_score": ":.1f",
-            "shortage_score": ":.1f",
-            "feasibility_score": ":.1f",
-            "lat": False,
-            "lon": False,
-            "population": ":,",
-        },
-        color_continuous_scale="RdYlGn",
-        scope="usa",
-        size_max=32,
-    )
-    fig.update_traces(marker=dict(line=dict(width=0.5, color="rgba(40,40,40,0.4)")))
+    fig = go.Figure()
+    for ring in national_background_rings():
+        lons = [p[0] for p in ring]
+        lats = [p[1] for p in ring]
+        fig.add_trace(go.Scattergeo(
+            lon=lons, lat=lats, mode="lines", fill="toself",
+            fillcolor=GEO_LAND_COLOR, line=dict(color=GEO_SUBUNIT_COLOR, width=1),
+            showlegend=False, hoverinfo="skip",
+        ))
+
+    max_pop = scored["population"].max()
+    fig.add_trace(go.Scattergeo(
+        lat=scored["lat"], lon=scored["lon"], mode="markers",
+        marker=dict(
+            size=scored["population"], sizemode="area",
+            sizeref=2.0 * max_pop / (42 ** 2), sizemin=4,
+            color=scored["opportunity_score"], colorscale="RdYlGn", cmin=0, cmax=100,
+            colorbar=dict(title="Opportunity<br>Score"),
+            line=dict(width=0.5, color="rgba(40,40,40,0.5)"),
+        ),
+        text=scored["metro"],
+        customdata=scored[["opportunity_score", "shortage_score", "feasibility_score", "population"]],
+        hovertemplate=(
+            "<b>%{text}</b><br>Opportunity: %{customdata[0]:.1f}<br>"
+            "Shortage: %{customdata[1]:.1f} · Feasibility: %{customdata[2]:.1f}<br>"
+            "Population: %{customdata[3]:,.0f}<extra></extra>"
+        ),
+        showlegend=False,
+    ))
+
     fig.update_geos(
-        showland=True, landcolor=GEO_LAND_COLOR,
-        showlakes=True, lakecolor=GEO_OCEAN_COLOR,
-        showsubunits=True, subunitcolor=GEO_SUBUNIT_COLOR, subunitwidth=1,
-        showcountries=True, countrycolor=GEO_COUNTRY_COLOR,
-        showcoastlines=True, coastlinecolor=GEO_COASTLINE_COLOR,
-        showocean=True, oceancolor=GEO_OCEAN_COLOR,
-        bgcolor=GEO_OCEAN_COLOR,
+        projection_type="mercator",
+        lataxis_range=[24, 50], lonaxis_range=[-125, -66],
+        showland=False, showcountries=False, showcoastlines=False,
+        showlakes=False, showsubunits=False, showocean=False, showframe=False,
+        bgcolor=GEO_BG_COLOR,
     )
-    fig.update_layout(
-        height=640, margin=dict(l=0, r=0, t=10, b=0),
-        legend=dict(bgcolor="rgba(255,255,255,0.8)"),
-    )
+    fig.update_layout(height=640, margin=dict(l=0, r=0, t=10, b=0))
     st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------- metro breakdown --
@@ -398,6 +406,14 @@ with tab_breakdown:
 
     by_tier = subarea_scored.set_index("subarea")
     fig_geo = go.Figure()
+    for ring in state_rings(row["state"]):
+        lons = [p[0] for p in ring]
+        lats = [p[1] for p in ring]
+        fig_geo.add_trace(go.Scattergeo(
+            lon=lons, lat=lats, mode="lines", fill="toself",
+            fillcolor=GEO_LAND_COLOR, line=dict(color=GEO_SUBUNIT_COLOR, width=1.5),
+            showlegend=False, hoverinfo="skip",
+        ))
     for tier in reversed(SUBAREA_TIERS):
         tier_row = by_tier.loc[tier]
         radius = RING_OUTER_RADIUS_MILES[tier]
@@ -424,16 +440,20 @@ with tab_breakdown:
     lat_margin = 85 / MILES_PER_DEGREE_LAT
     lon_margin = 85 / (MILES_PER_DEGREE_LAT * max(0.15, math.cos(math.radians(row["lat"]))))
     fig_geo.update_geos(
-        scope="usa",
+        # NOTE: this deliberately avoids Plotly's built-in basemap layers
+        # (showland/showcountries/showcoastlines/etc, and especially
+        # scope="usa" or projection_type="albers usa") -- all of them
+        # fetch topojson from cdn.plot.ly at render time, which is blocked
+        # in restricted networks and rendered this map blank before. The
+        # state outline and everything else visible here is drawn from our
+        # own offline shapefile data (pipeline/geo_shapes.py) instead, so
+        # this map needs no network access at all.
+        projection_type="mercator",
         lataxis_range=[row["lat"] - lat_margin, row["lat"] + lat_margin],
         lonaxis_range=[row["lon"] - lon_margin, row["lon"] + lon_margin],
-        showland=True, landcolor=GEO_LAND_COLOR,
-        showlakes=True, lakecolor=GEO_OCEAN_COLOR,
-        showsubunits=True, subunitcolor=GEO_SUBUNIT_COLOR, subunitwidth=1.5,
-        showcountries=True, countrycolor=GEO_COUNTRY_COLOR,
-        showcoastlines=True, coastlinecolor=GEO_COASTLINE_COLOR,
-        showocean=True, oceancolor=GEO_OCEAN_COLOR,
-        bgcolor=GEO_OCEAN_COLOR,
+        showland=False, showcountries=False, showcoastlines=False,
+        showlakes=False, showsubunits=False, showocean=False, showframe=False,
+        bgcolor=GEO_BG_COLOR,
     )
     fig_geo.update_layout(
         height=560, margin=dict(l=0, r=0, t=10, b=0),
