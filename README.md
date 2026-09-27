@@ -17,9 +17,9 @@ Live app: deploy to [Render](https://render.com) using `render.yaml` (see
 ## What's in the app
 
 - **Ranked Table** — all metros sorted by Opportunity Score, downloadable as CSV
-- **Map** — metros plotted by opportunity score and population (no external map-tile dependency)
-- **Metro Breakdown** — per-metro Shortage component z-scores and a Feasibility cost waterfall
-- **Buy-Down Calculator** — standard mortgage amortization vs. a 2-1 temporary rate buy-down (illustrative only, not a loan product)
+- **Map** — metros plotted on a real U.S. basemap (land, state borders, coastlines), bubble size = population, color = Opportunity Score
+- **Metro Breakdown** — per-metro Shortage component z-scores, a Feasibility cost waterfall, and a **sub-metro "zoom in"**: every metro is broken into four illustrative submarket rings (Urban Core, Inner Suburbs, Outer Suburbs, Exurban / Micropolitan Fringe) ranked against each other so a developer can see *where within the metro* the numbers work best, not just which metro nationally ranks highest
+- **Buy-Down Calculator** — a metro-linked 2-1 temporary buy-down calculator: Loan Inputs / Payment Summary cards, a savings callout, a monthly-payment-over-time comparison chart (2-1 buydown vs. standard fixed), and metro-context stat tiles (median home price, price-to-income, Opportunity Score). Illustrative only, not a loan product.
 - **Data Sources** — a transparency table showing which fields are live-sourced vs. synthetic estimates, for every field in the current view
 
 Sidebar controls: metro universe (top 20 / top 50), Opportunity Score weight
@@ -57,6 +57,30 @@ note rate vs. a 2-1 temporary buy-down, showing the payment delta.
 Illustrative only, not a loan product.
 
 The exact formulas are implemented in `scoring.py` and `finance.py`.
+
+### Sub-metro zoom-in rings
+
+Site selection happens below the metro level, so the Metro Breakdown tab
+also scores four illustrative submarket rings *within* the selected metro:
+Urban Core, Inner Suburbs, Outer Suburbs, and Exurban / Micropolitan Fringe.
+Every metro uses the same four generic rings rather than specific named
+places or counties — there is no free, sub-metro-level public dataset for
+the feasibility-side inputs (same reason those fields are synthetic at the
+metro level), and fabricating precise county/neighborhood detail for 50
+metros without a verified source would trade a defensible estimate for an
+unverifiable one.
+
+Each ring applies documented, real-estate-standard core-vs-periphery
+adjustments to the parent metro's data (see `pipeline/subareas.py` for the
+exact factors): land cost and construction cost step down sharply from
+Urban Core to Exurban Fringe, permitting friction eases, and vacancy loosens
+slightly; HUD Area Median Income is held constant across rings (HUD
+publishes one income-limit schedule per metro), so only the cost side of
+the feasibility math changes ring to ring, not the achievable-rent side.
+Shortage/Feasibility/Opportunity scores for the four rings are z-scored
+*within that one metro's four rings*, not against the national 50-metro
+set — they answer "which ring is relatively best to site in, within this
+metro," not "how does this ring compare to a different metro."
 
 ## Data sources & what's synthetic
 
@@ -114,6 +138,7 @@ pipeline/
   fetch_fhfa.py                Live FHFA HPI pulls
   fetch_zillow.py              Live Zillow ZORI/ZHVI bulk CSV pulls
   fetch_fred.py                 Live FRED series pulls
+  subareas.py                  Sub-metro submarket ring generator (Urban Core / Inner Suburbs / Outer Suburbs / Exurban Fringe)
   build_dataset.py             Orchestrator: live-first, synthetic-fallback, writes data/metro_dataset.csv
 data/metro_dataset.csv        Bundled dataset (50 metros) shipped with the app
 tests/test_scoring.py         Unit tests for scoring math and finance calculator
@@ -137,6 +162,15 @@ streamlit run app.py
 ```
 
 Then open the URL Streamlit prints (defaults to http://localhost:8501).
+
+**Note on the Map tab**: it renders a real U.S. basemap (land, state
+borders, coastlines) via Plotly's `scope="usa"` geo trace, which fetches
+basemap shapes from Plotly's public CDN (`cdn.plot.ly`) in the viewer's
+browser the first time the map loads. This works in any normal browser and
+on Render's default network; it will only fail to render if the viewer's
+own network blocks that CDN (e.g. a locked-down corporate proxy). If the
+map ever comes up blank for a viewer, that CDN reachability is the first
+thing to check.
 
 Run the test suite with:
 

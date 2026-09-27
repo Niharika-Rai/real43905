@@ -8,7 +8,6 @@ without subsidy signal), per the REAL 43905 project charter.
 
 from __future__ import annotations
 
-import math
 import os
 
 import pandas as pd
@@ -18,6 +17,7 @@ import streamlit as st
 
 from metros import metros_frame
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
+from pipeline.subareas import generate_subarea_dataset
 from scoring import (
     score_metros,
     DEFAULT_SHORTAGE_WEIGHTS,
@@ -25,7 +25,7 @@ from scoring import (
     DEFAULT_UNIT_SIZE_SF,
     DEFAULT_SOFT_COST_PCT,
 )
-from finance import monthly_payment, two_one_buydown
+from finance import two_one_buydown
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
@@ -195,14 +195,13 @@ with tab_rank:
 with tab_map:
     st.subheader("Opportunity Score by Metro")
     st.caption(
-        "Plotted by longitude/latitude with a geographic aspect correction "
-        "(not a tile/basemap map) so it renders with no external map-tile "
-        "dependency -- reliable in locked-down networks and offline demos."
+        "Bubble size = population, color = Opportunity Score. Hover a metro "
+        "for its score breakdown."
     )
-    fig = px.scatter(
+    fig = px.scatter_geo(
         scored,
-        x="lon",
-        y="lat",
+        lat="lat",
+        lon="lon",
         color="opportunity_score",
         size="population",
         hover_name="metro",
@@ -215,20 +214,21 @@ with tab_map:
             "population": ":,",
         },
         color_continuous_scale="RdYlGn",
+        scope="usa",
         size_max=32,
-        text="state",
     )
-    fig.update_traces(textposition="top center", textfont_size=9)
-    mean_lat = scored["lat"].mean()
-    fig.update_yaxes(
-        scaleanchor="x",
-        scaleratio=1 / max(0.2, math.cos(math.radians(mean_lat))),
-        showgrid=False, zeroline=False, visible=False,
+    fig.update_traces(marker=dict(line=dict(width=0.5, color="rgba(40,40,40,0.4)")))
+    fig.update_geos(
+        showland=True, landcolor="rgb(235, 238, 231)",
+        showlakes=True, lakecolor="rgb(255, 255, 255)",
+        showsubunits=True, subunitcolor="rgb(190, 190, 190)", subunitwidth=1,
+        showcountries=True, countrycolor="rgb(150, 150, 150)",
+        showcoastlines=True, coastlinecolor="rgb(150, 150, 150)",
+        bgcolor="rgba(0,0,0,0)",
     )
-    fig.update_xaxes(showgrid=False, zeroline=False, visible=False)
     fig.update_layout(
-        height=620, margin=dict(l=0, r=0, t=10, b=0),
-        plot_bgcolor="rgba(240,246,255,0.6)",
+        height=640, margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(bgcolor="rgba(255,255,255,0.8)"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -291,36 +291,194 @@ with tab_breakdown:
     detail = row[detail_cols].to_frame(name="value")
     st.dataframe(detail, use_container_width=True)
 
+    st.divider()
+    st.subheader(f"Zoom In: Sub-Metro Rings within {metro_choice}")
+    st.caption(
+        "The metro-wide score above is a useful first screen, but affordable "
+        "developers site at the sub-metro level. Every metro is broken into "
+        "four illustrative submarket rings -- Urban Core, Inner Suburbs, "
+        "Outer Suburbs, and Exurban / Micropolitan Fringe -- using "
+        "real-estate-standard core-vs-periphery adjustments (land cost, "
+        "construction cost, vacancy, and permitting friction all vary "
+        "predictably from downtown outward). These are **illustrative "
+        "estimates for comparing rings within this one metro**, not "
+        "specific real places and not comparable across metros -- there is "
+        "no free, sub-metro-level public dataset for the feasibility "
+        "inputs, same as at the metro level. See the Data Sources tab."
+    )
+
+    subarea_raw = generate_subarea_dataset(row)
+    subarea_scored = score_metros(
+        subarea_raw,
+        shortage_weights=shortage_weights,
+        feasibility_weights=feasibility_weights,
+        ami_tier_pct=ami_tier_pct,
+        density_tier=density_tier,
+        unit_size_sf=unit_size_sf,
+        soft_cost_pct=soft_cost_pct,
+        alpha=alpha,
+    ).sort_values("opportunity_score", ascending=False)
+
+    ring_col, chart_col = st.columns([3, 2])
+    with ring_col:
+        ring_display_cols = {
+            "subarea": "Sub-Metro Ring",
+            "opportunity_score": "Opportunity (local)",
+            "shortage_score": "Shortage (local)",
+            "feasibility_score": "Feasibility (local)",
+            "price_to_income": "Price/Income",
+            "land_cost_per_unit_usd": "Land Cost/Unit",
+            "permit_velocity_index": "Permit Friction",
+        }
+        ring_table = subarea_scored[list(ring_display_cols.keys())].rename(columns=ring_display_cols)
+        st.dataframe(
+            ring_table,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Opportunity (local)": st.column_config.ProgressColumn(
+                    "Opportunity (local)", min_value=0, max_value=100, format="%.0f"
+                ),
+                "Shortage (local)": st.column_config.NumberColumn(format="%.0f"),
+                "Feasibility (local)": st.column_config.NumberColumn(format="%.0f"),
+                "Price/Income": st.column_config.NumberColumn(format="%.2f×"),
+                "Land Cost/Unit": st.column_config.NumberColumn(format="$%,.0f"),
+                "Permit Friction": st.column_config.NumberColumn(format="%.0f"),
+            },
+        )
+        st.caption(
+            "\"Local\" scores are z-scored across just these 4 rings, so they "
+            "show which ring is relatively best *within this metro* -- they "
+            "are not on the same 0-100 scale as the national metro rankings."
+        )
+
+    with chart_col:
+        fig_ring = go.Figure(
+            go.Bar(
+                x=subarea_scored["opportunity_score"],
+                y=subarea_scored["subarea"],
+                orientation="h",
+                marker=dict(
+                    color=subarea_scored["opportunity_score"],
+                    colorscale="RdYlGn", cmin=0, cmax=100,
+                ),
+            )
+        )
+        fig_ring.update_layout(
+            height=280, margin=dict(l=0, r=0, t=30, b=0),
+            xaxis_title="Local Opportunity Score", yaxis=dict(autorange="reversed"),
+            title="Best ring to site within this metro",
+        )
+        st.plotly_chart(fig_ring, use_container_width=True)
+
 # ------------------------------------------------------------- buy-down calc --
 with tab_buydown:
-    st.subheader("Homebuyer Buy-Down Calculator (illustrative only)")
-    st.caption("Not a loan product or financial advice -- for illustration of payment relief from a 2-1 temporary rate buy-down.")
+    st.subheader("2-1 Temporary Buy-Down Calculator")
+    st.caption("Illustrative only -- not a loan offer or financial advice.")
 
-    bc1, bc2, bc3 = st.columns(3)
-    home_price = bc1.number_input("Home price ($)", min_value=50_000, max_value=3_000_000, value=350_000, step=5_000)
-    down_pct = bc2.slider("Down payment (%)", 0, 50, 10)
-    note_rate = bc3.number_input("Note rate (%)", min_value=0.0, max_value=15.0, value=6.5, step=0.125)
-    term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
-
-    principal = home_price * (1 - down_pct / 100)
-    result = two_one_buydown(principal, note_rate, term_years)
-
-    st.markdown(f"Financed amount: **${principal:,.0f}**")
-
-    payment_table = pd.DataFrame(
-        {
-            "Period": ["Year 1 (buy-down)", "Year 2 (buy-down)", "Year 3+ (note rate)"],
-            "Rate": [f"{result.year1_rate_pct:.2f}%", f"{result.year2_rate_pct:.2f}%", f"{result.note_rate_pct:.2f}%"],
-            "Monthly payment": [
-                f"${result.year1_payment:,.0f}", f"${result.year2_payment:,.0f}", f"${result.note_payment:,.0f}",
-            ],
-            "Monthly savings vs. note rate": [
-                f"${result.year1_monthly_savings:,.0f}", f"${result.year2_monthly_savings:,.0f}", "$0",
-            ],
-        }
+    buydown_metro = st.selectbox(
+        "Example scenario for a site in", options=scored["metro"].tolist(), key="buydown_metro",
     )
-    st.table(payment_table)
-    st.metric("Total buy-down subsidy needed (Years 1-2)", f"${result.total_buydown_subsidy:,.0f}")
+    metro_ctx = scored[scored["metro"] == buydown_metro].iloc[0]
+
+    input_col, summary_col = st.columns(2)
+
+    with input_col:
+        with st.container(border=True):
+            st.markdown("**LOAN INPUTS**")
+            home_price = st.number_input(
+                "Home price ($)", min_value=50_000, max_value=3_000_000,
+                value=int(round(metro_ctx["median_home_price_usd"], -3)), step=5_000,
+                key=f"home_price_{buydown_metro}",
+                help="Defaults to this metro's median home price -- edit for a specific property.",
+            )
+            down_pct = st.slider("Down payment (%)", 0, 50, 10)
+            down_usd = home_price * down_pct / 100
+            st.caption(f"{down_pct}% · \\${down_usd:,.0f}")
+            term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
+            note_rate = st.number_input("Note rate (%)", min_value=0.0, max_value=15.0, value=6.5, step=0.125)
+            financing_type = st.radio(
+                "Financing type", ["Standard Fixed", "2-1 Buydown"], index=1, horizontal=True,
+            )
+
+    principal = home_price - down_usd
+    result = two_one_buydown(principal, note_rate, term_years)
+    standard_payment = result.note_payment
+
+    with summary_col:
+        with st.container(border=True):
+            st.markdown("**PAYMENT SUMMARY**")
+            periods = [("Year 1", result.year1_rate_pct, result.year1_payment)]
+            if term_years >= 2:
+                periods.append(("Year 2", result.year2_rate_pct, result.year2_payment))
+            if term_years >= 3:
+                label = "Year 3" if term_years == 3 else f"Year 3-{term_years}"
+                periods.append((label, result.note_rate_pct, result.note_payment))
+
+            if financing_type == "2-1 Buydown":
+                summary_table = pd.DataFrame(
+                    [{"Year": p, "Rate": f"{r:.2f}%", "Monthly Payment": f"${m:,.0f}"} for p, r, m in periods]
+                )
+                st.table(summary_table)
+
+                savings_parts = [f"about \\${result.year1_monthly_savings:,.0f}/mo in Year 1"]
+                total_savings = result.year1_monthly_savings * 12
+                if term_years >= 2:
+                    savings_parts.append(f"\\${result.year2_monthly_savings:,.0f}/mo in Year 2")
+                    total_savings += result.year2_monthly_savings * 12
+                savings_sentence = "Buyer saves " + " and ".join(savings_parts)
+                if term_years >= 3:
+                    savings_sentence += f" -- roughly \\${total_savings:,.0f} total before the rate resets."
+                else:
+                    savings_sentence += f" -- roughly \\${total_savings:,.0f} total over the life of this {term_years}-year loan."
+                st.success(savings_sentence, icon="✅")
+            else:
+                st.table(pd.DataFrame([{"Year": f"1-{term_years}", "Rate": f"{note_rate:.2f}%", "Monthly Payment": f"${standard_payment:,.0f}"}]))
+                st.info(
+                    f"Standard fixed loan -- \\${standard_payment:,.0f}/mo for all {term_years} years, "
+                    "no temporary rate reduction. Switch to \"2-1 Buydown\" above to see payment relief.",
+                    icon="ℹ️",
+                )
+            st.caption(f"Financed amount: \\${principal:,.0f} ({100 - down_pct}% of \\${home_price:,.0f})")
+
+    with st.container(border=True):
+        st.markdown("**MONTHLY PAYMENT OVER TIME**")
+        chart_years = min(5, term_years)
+        st.caption(f"{term_years}-year fixed loan · {down_pct}% down · \\${principal:,.0f} principal")
+
+        x_years = list(range(1, chart_years + 1))
+        y_buydown = [
+            result.year1_payment if y == 1 else result.year2_payment if y == 2 else result.note_payment
+            for y in x_years
+        ]
+        y_standard = [standard_payment] * len(x_years)
+
+        fig_pay = go.Figure()
+        fig_pay.add_trace(go.Scatter(
+            x=x_years, y=y_buydown, name="2-1 Buydown", mode="lines+markers",
+            line=dict(color="#c1873b", width=3), marker=dict(size=8),
+        ))
+        fig_pay.add_trace(go.Scatter(
+            x=x_years, y=y_standard, name="Standard Fixed", mode="lines",
+            line=dict(color="#555555", width=2, dash="dash"),
+        ))
+        if term_years >= 3:
+            fig_pay.add_vline(x=2.5, line_width=1, line_dash="dot", line_color="gray")
+            fig_pay.add_annotation(x=2.5, y=max(y_buydown + y_standard), text="Rate resets", showarrow=False, yshift=12, font=dict(size=10, color="gray"))
+        fig_pay.update_layout(
+            height=340, margin=dict(l=0, r=0, t=10, b=0),
+            xaxis=dict(title="Year", tickmode="array", tickvals=x_years),
+            yaxis_title="Monthly payment ($)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        st.plotly_chart(fig_pay, use_container_width=True)
+        if term_years >= 3:
+            st.caption("Rate and payment return to the note rate in Year 3 and hold there for the rest of the loan.")
+
+    stat1, stat2, stat3 = st.columns(3)
+    stat1.metric("Median Home Price", f"${metro_ctx['median_home_price_usd']:,.0f}")
+    stat2.metric("Price-to-Income Ratio", f"{metro_ctx['price_to_income']:.1f}×")
+    stat3.metric(f"Opportunity Score -- {buydown_metro}", f"{metro_ctx['opportunity_score']:.0f} / 100")
 
 # ------------------------------------------------------------------ sources --
 with tab_sources:

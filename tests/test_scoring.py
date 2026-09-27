@@ -8,6 +8,7 @@ import pytest
 
 from scoring import score_metros, zscore, normalize_0_100
 from finance import monthly_payment, two_one_buydown
+from pipeline.subareas import generate_subarea_dataset, SUBAREA_TIERS
 
 
 @pytest.fixture
@@ -64,3 +65,27 @@ def test_two_one_buydown_savings_positive():
     assert result.year2_monthly_savings > 0
     assert result.year1_monthly_savings > result.year2_monthly_savings
     assert result.total_buydown_subsidy > 0
+
+
+def test_two_one_buydown_short_term_does_not_crash():
+    result = two_one_buydown(300_000, 6.5, 1)
+    assert result.year1_payment > 0
+
+
+def test_generate_subarea_dataset_shape(dataset):
+    row = dataset.iloc[0]
+    sub = generate_subarea_dataset(row)
+    assert len(sub) == len(SUBAREA_TIERS)
+    assert set(sub["subarea"]) == set(SUBAREA_TIERS)
+    assert sub["ami_usd"].nunique() == 1
+    assert sub.loc[sub["subarea"] == "Urban Core", "land_cost_per_acre_usd"].iloc[0] > \
+        sub.loc[sub["subarea"] == "Exurban / Micropolitan Fringe", "land_cost_per_acre_usd"].iloc[0]
+
+
+def test_subarea_scores_within_metro(dataset):
+    row = dataset.iloc[0]
+    sub = generate_subarea_dataset(row)
+    scored_sub = score_metros(sub)
+    assert len(scored_sub) == len(SUBAREA_TIERS)
+    for col in ("shortage_score", "feasibility_score", "opportunity_score"):
+        assert scored_sub[col].between(-1, 101).all(), col
