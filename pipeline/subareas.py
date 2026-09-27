@@ -28,6 +28,8 @@ hit downtown, purely because land and construction cost more there).
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 
@@ -37,6 +39,34 @@ SUBAREA_TIERS = [
     "Outer Suburbs",
     "Exurban / Micropolitan Fringe",
 ]
+
+# Illustrative outer radius (miles from the metro's principal-city point) for
+# each ring, used only for the schematic map in the app -- these are
+# stylized, evenly-applied bands for visualizing "closer in vs. farther out"
+# across every metro consistently, not surveyed commute-shed or MSA-boundary
+# distances for any specific place.
+RING_OUTER_RADIUS_MILES: dict[str, float] = {
+    "Urban Core": 8.0,
+    "Inner Suburbs": 20.0,
+    "Outer Suburbs": 40.0,
+    "Exurban / Micropolitan Fringe": 70.0,
+}
+
+MILES_PER_DEGREE_LAT = 69.0
+
+
+def ring_circle_points(center_lat: float, center_lon: float, radius_miles: float, n: int = 72):
+    """Approximate lat/lon points tracing a circle of `radius_miles` around a point.
+
+    Longitude spacing is widened by 1/cos(latitude) so the circle renders
+    visually round on an equirectangular-ish geo projection at this scale.
+    """
+    lat_r = radius_miles / MILES_PER_DEGREE_LAT
+    lon_r = radius_miles / (MILES_PER_DEGREE_LAT * max(0.15, math.cos(math.radians(center_lat))))
+    angles = np.linspace(0, 2 * math.pi, n)
+    lats = center_lat + lat_r * np.sin(angles)
+    lons = center_lon + lon_r * np.cos(angles)
+    return lats.tolist(), lons.tolist()
 
 # Multiplicative factors apply as value *= factor; additive factors apply as
 # value += factor (used for things already expressed as a rate/index, where

@@ -8,16 +8,24 @@ without subsidy signal), per the REAL 43905 project charter.
 
 from __future__ import annotations
 
+import math
 import os
 
 import pandas as pd
+import plotly.colors as pcolors
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
 from metros import metros_frame
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
-from pipeline.subareas import generate_subarea_dataset
+from pipeline.subareas import (
+    generate_subarea_dataset,
+    SUBAREA_TIERS,
+    RING_OUTER_RADIUS_MILES,
+    ring_circle_points,
+    MILES_PER_DEGREE_LAT,
+)
 from scoring import (
     score_metros,
     DEFAULT_SHORTAGE_WEIGHTS,
@@ -28,6 +36,14 @@ from scoring import (
 from finance import two_one_buydown
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
+
+# shared geo basemap styling (used by both the national map and the
+# state-level sub-metro ring map)
+GEO_OCEAN_COLOR = "rgb(202, 227, 245)"
+GEO_LAND_COLOR = "rgb(247, 247, 244)"
+GEO_SUBUNIT_COLOR = "rgb(170, 170, 170)"
+GEO_COUNTRY_COLOR = "rgb(140, 140, 140)"
+GEO_COASTLINE_COLOR = "rgb(140, 140, 140)"
 
 st.set_page_config(
     page_title="Affordable Housing Opportunity Explorer",
@@ -219,12 +235,13 @@ with tab_map:
     )
     fig.update_traces(marker=dict(line=dict(width=0.5, color="rgba(40,40,40,0.4)")))
     fig.update_geos(
-        showland=True, landcolor="rgb(235, 238, 231)",
-        showlakes=True, lakecolor="rgb(255, 255, 255)",
-        showsubunits=True, subunitcolor="rgb(190, 190, 190)", subunitwidth=1,
-        showcountries=True, countrycolor="rgb(150, 150, 150)",
-        showcoastlines=True, coastlinecolor="rgb(150, 150, 150)",
-        bgcolor="rgba(0,0,0,0)",
+        showland=True, landcolor=GEO_LAND_COLOR,
+        showlakes=True, lakecolor=GEO_OCEAN_COLOR,
+        showsubunits=True, subunitcolor=GEO_SUBUNIT_COLOR, subunitwidth=1,
+        showcountries=True, countrycolor=GEO_COUNTRY_COLOR,
+        showcoastlines=True, coastlinecolor=GEO_COASTLINE_COLOR,
+        showocean=True, oceancolor=GEO_OCEAN_COLOR,
+        bgcolor=GEO_OCEAN_COLOR,
     )
     fig.update_layout(
         height=640, margin=dict(l=0, r=0, t=10, b=0),
@@ -370,6 +387,59 @@ with tab_breakdown:
             title="Best ring to site within this metro",
         )
         st.plotly_chart(fig_ring, use_container_width=True)
+
+    st.markdown(f"**Where within {metro_choice}**")
+    st.caption(
+        "Schematic view only -- rings are stylized concentric bands around "
+        "the metro's center point (fixed radii, the same for every metro), "
+        "not surveyed neighborhood or county boundaries. Color = local "
+        "Opportunity Score for that ring."
+    )
+
+    by_tier = subarea_scored.set_index("subarea")
+    fig_geo = go.Figure()
+    for tier in reversed(SUBAREA_TIERS):
+        tier_row = by_tier.loc[tier]
+        radius = RING_OUTER_RADIUS_MILES[tier]
+        lats, lons = ring_circle_points(row["lat"], row["lon"], radius)
+        color = pcolors.sample_colorscale("RdYlGn", [tier_row["opportunity_score"] / 100])[0]
+        fig_geo.add_trace(go.Scattergeo(
+            lat=lats, lon=lons, mode="lines", fill="toself",
+            fillcolor=color, line=dict(color="rgba(80,80,80,0.5)", width=1),
+            opacity=0.75, name=f"{tier} ({tier_row['opportunity_score']:.0f})",
+            hoverinfo="text",
+            text=(
+                f"{tier}<br>Local Opportunity: {tier_row['opportunity_score']:.0f}<br>"
+                f"Shortage: {tier_row['shortage_score']:.0f} · Feasibility: {tier_row['feasibility_score']:.0f}<br>"
+                f"~{radius:.0f} mi radius (illustrative)"
+            ),
+        ))
+    fig_geo.add_trace(go.Scattergeo(
+        lat=[row["lat"]], lon=[row["lon"]], mode="markers+text",
+        marker=dict(size=11, color="black", symbol="star"),
+        text=[metro_choice], textposition="top center",
+        name="Metro center", hoverinfo="text",
+    ))
+
+    lat_margin = 85 / MILES_PER_DEGREE_LAT
+    lon_margin = 85 / (MILES_PER_DEGREE_LAT * max(0.15, math.cos(math.radians(row["lat"]))))
+    fig_geo.update_geos(
+        scope="usa",
+        lataxis_range=[row["lat"] - lat_margin, row["lat"] + lat_margin],
+        lonaxis_range=[row["lon"] - lon_margin, row["lon"] + lon_margin],
+        showland=True, landcolor=GEO_LAND_COLOR,
+        showlakes=True, lakecolor=GEO_OCEAN_COLOR,
+        showsubunits=True, subunitcolor=GEO_SUBUNIT_COLOR, subunitwidth=1.5,
+        showcountries=True, countrycolor=GEO_COUNTRY_COLOR,
+        showcoastlines=True, coastlinecolor=GEO_COASTLINE_COLOR,
+        showocean=True, oceancolor=GEO_OCEAN_COLOR,
+        bgcolor=GEO_OCEAN_COLOR,
+    )
+    fig_geo.update_layout(
+        height=560, margin=dict(l=0, r=0, t=10, b=0),
+        legend=dict(bgcolor="rgba(255,255,255,0.85)", orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(fig_geo, use_container_width=True)
 
 # ------------------------------------------------------------- buy-down calc --
 with tab_buydown:

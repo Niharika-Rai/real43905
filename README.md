@@ -82,6 +82,14 @@ Shortage/Feasibility/Opportunity scores for the four rings are z-scored
 set — they answer "which ring is relatively best to site in, within this
 metro," not "how does this ring compare to a different metro."
 
+Below the ring table/chart, the Metro Breakdown tab also plots a **state-level
+map** cropped around the selected metro (via `pipeline.subareas.ring_circle_points`)
+showing a star at the metro's center and the four rings as concentric shaded
+bands around it, colored by each ring's local Opportunity Score. Ring radii
+(8 / 20 / 40 / 70 miles) are fixed, stylized bands applied the same way to
+every metro -- they visualize "closer in vs. farther out," not a surveyed
+commute-shed or neighborhood boundary for any specific place.
+
 ## Data sources & what's synthetic
 
 Per the charter, real inputs are pulled from **public APIs and bulk data
