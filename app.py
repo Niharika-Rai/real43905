@@ -287,30 +287,54 @@ with tab_breakdown:
 
     with col_b:
         st.markdown("**Feasibility waterfall ($/unit)**")
-        fig_f = go.Figure(
-            go.Waterfall(
-                orientation="v",
-                # Plotly's "total" measure ignores the y value you give it
-                # and instead shows the running cumulative sum of every
-                # prior entry -- so "Feasibility Gap" must be the "relative"
-                # delta step (colored green/red by sign automatically), and
-                # "Supportable Value" the "total" step whose auto-computed
-                # cumulative (DevCost + Gap) equals the actual supportable
-                # value. Swapping these two mislabels which bar shows what.
-                measure=["relative", "relative", "relative", "total", "relative", "total"],
-                x=["Land Cost", "Hard Cost", "Soft Cost", "Dev Cost", "Feasibility Gap", "Supportable Value"],
-                y=[
-                    row["land_cost_per_unit_usd"],
-                    row["hard_cost_per_unit_usd"],
-                    row["soft_costs_usd"],
-                    0,
-                    row["supportable_value_usd"] - row["development_cost_per_unit_usd"],
-                    0,
-                ],
-            )
-        )
+        gap = row["feasibility_gap_usd"]
+        gap_color = "#2ca02c" if gap >= 0 else "#d62728"
+
+        # Two traces sharing one categorical x-axis. The Waterfall handles
+        # the running build-up (Land+Hard+Soft -> Dev Cost) and the bridge
+        # to Supportable Value, positioned right after Dev Cost as its
+        # cumulative total. Feasibility Gap can't be a third link in that
+        # same chain without either double-counting the bridge amount or
+        # losing its position next to Dev Cost (Plotly's "total" measure
+        # only ever shows the cumulative sum of everything before it) --
+        # so it's drawn as an independent bar, starting fresh from zero,
+        # colored by whether the metro pencils without subsidy.
+        fig_f = go.Figure()
+        fig_f.add_trace(go.Waterfall(
+            orientation="v",
+            measure=["relative", "relative", "relative", "total", "relative"],
+            x=["Land Cost", "Hard Cost", "Soft Cost", "Dev Cost", "Supportable Value"],
+            y=[
+                row["land_cost_per_unit_usd"],
+                row["hard_cost_per_unit_usd"],
+                row["soft_costs_usd"],
+                0,
+                gap,
+            ],
+            text=[
+                f"${row['land_cost_per_unit_usd']:,.0f}",
+                f"${row['hard_cost_per_unit_usd']:,.0f}",
+                f"${row['soft_costs_usd']:,.0f}",
+                f"${row['development_cost_per_unit_usd']:,.0f}",
+                f"${row['supportable_value_usd']:,.0f}",
+            ],
+            textposition="outside",
+            showlegend=False,
+        ))
+        fig_f.add_trace(go.Bar(
+            x=["Feasibility Gap"], y=[gap],
+            marker_color=gap_color,
+            text=[f"${gap:,.0f}"], textposition="outside",
+            name="Feasibility Gap", showlegend=False,
+        ))
         fig_f.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0), yaxis_title="$/unit")
         st.plotly_chart(fig_f, use_container_width=True)
+        st.caption(
+            "Supportable Value floats from Dev Cost to show where it lands. "
+            "Feasibility Gap is shown separately (green = buildable without "
+            "subsidy, red = needs one) since it's the same amount as that "
+            "bridge, not an additional cost or value."
+        )
 
     st.markdown("**Underlying values**")
     detail_cols = [
