@@ -290,8 +290,15 @@ with tab_breakdown:
         fig_f = go.Figure(
             go.Waterfall(
                 orientation="v",
+                # Plotly's "total" measure ignores the y value you give it
+                # and instead shows the running cumulative sum of every
+                # prior entry -- so "Feasibility Gap" must be the "relative"
+                # delta step (colored green/red by sign automatically), and
+                # "Supportable Value" the "total" step whose auto-computed
+                # cumulative (DevCost + Gap) equals the actual supportable
+                # value. Swapping these two mislabels which bar shows what.
                 measure=["relative", "relative", "relative", "total", "relative", "total"],
-                x=["Land Cost", "Hard Cost", "Soft Cost", "Dev Cost", "Supportable Value", "Feasibility Gap"],
+                x=["Land Cost", "Hard Cost", "Soft Cost", "Dev Cost", "Feasibility Gap", "Supportable Value"],
                 y=[
                     row["land_cost_per_unit_usd"],
                     row["hard_cost_per_unit_usd"],
