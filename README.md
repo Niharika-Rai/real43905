@@ -5,26 +5,49 @@ This repository is for the Real Estate Industry Project Class (REAL 43905).
 The U.S. is short more than 7 million affordable housing units, but developers,
 CDFIs, and housing authorities have no fast way to cross-reference "where
 housing is underserved" against "where building actually pencils out
-financially." This app ranks the top U.S. metro areas by an **Opportunity
+financially." This app ranks **150 U.S. metro areas** by an **Opportunity
 Score**, derived from a **Shortage Score** (need signal) and a **Feasibility
 Score** (can-it-be-built-without-subsidy signal), so a developer can screen
 sites before commissioning a full pro forma. It also includes an illustrative
-homebuyer buy-down calculator.
+homebuyer buy-down calculator with multiple financing structures.
 
 Live app: deploy to [Render](https://render.com) using `render.yaml` (see
 **Deploying to Render** below).
 
 ## What's in the app
 
-- **Ranked Table** — all metros sorted by Opportunity Score, downloadable as CSV
-- **Map** — metros plotted on a real U.S. basemap (land, state borders, coastlines), bubble size = population, color = Opportunity Score
-- **Metro Breakdown** — per-metro Shortage component z-scores, a Feasibility cost waterfall, and a **sub-metro "zoom in"**: every metro is broken into four illustrative submarket rings (Urban Core, Inner Suburbs, Outer Suburbs, Exurban / Micropolitan Fringe) ranked against each other so a developer can see *where within the metro* the numbers work best, not just which metro nationally ranks highest
-- **Buy-Down Calculator** — a metro-linked 2-1 temporary buy-down calculator: Loan Inputs / Payment Summary cards, a savings callout, a monthly-payment-over-time comparison chart (2-1 buydown vs. standard fixed), and metro-context stat tiles (median home price, price-to-income, Opportunity Score). Illustrative only, not a loan product.
-- **Data Sources** — a transparency table showing which fields are live-sourced vs. synthetic estimates, for every field in the current view
+- **Ranked Table** — all 150 metros sorted by Opportunity Score, downloadable
+  as CSV. Every column header has a hover tooltip explaining what it shows
+  and how it's calculated.
+- **Map** — metros plotted on a real U.S. basemap (land, state borders,
+  coastlines), bubble size = population, color = Opportunity Score
+- **Metro Breakdown** — per-metro Shortage component z-scores, a Feasibility
+  cost waterfall, editable land-cost/hard-cost overrides, an "Add to
+  Comparison" button, and a **sub-metro "zoom in"**: every metro is broken
+  into four illustrative submarket rings (Urban Core, Inner Suburbs, Outer
+  Suburbs, Exurban / Micropolitan Fringe) ranked against each other so a
+  developer can see *where within the metro* the numbers work best, not just
+  which metro nationally ranks highest. Each ring also lists the real Census
+  counties that fall within it, and an expander explains exactly how the
+  ring radii were chosen.
+- **Metro Comparison** — a shortlist of metros added from the Metro
+  Breakdown tab, shown side-by-side: a grouped bar chart and a full
+  transposed comparison table, downloadable as CSV.
+- **Buy-Down Calculator** — a metro-linked calculator supporting Standard
+  Fixed, four temporary buy-down structures (3-2-1, 2-1, 1-1, 1-0), and a
+  Permanent Buydown (discount points): Loan Inputs / Payment Summary cards,
+  a note-rate dropdown of illustrative benchmark rates by loan type (with a
+  direct link to mortgagenewsdaily.com for live rates, plus full manual
+  override), a savings callout, a monthly-payment-over-time comparison
+  chart, and metro-context stat tiles. Illustrative only, not a loan
+  product.
+- **Data Sources** — a transparency table showing, for every field in the
+  current view, whether it is `live`, `published`, or `synthetic`.
 
-Sidebar controls: metro universe (top 20 / top 50), Opportunity Score weight
-(α/β), Shortage component weights, Feasibility component weights, AMI
-affordability tier, zoning/density tier, unit size, and soft-cost %.
+Sidebar controls ("Model Controls"): Opportunity Score weight (α/β),
+Shortage component weights, Feasibility component weights, AMI affordability
+tier, zoning/density tier, unit size, and soft-cost %. The metro universe is
+fixed at all 150 metros — there is no 20/50-metro toggle.
 
 ## Methodology (per the project charter)
 
@@ -40,8 +63,8 @@ current metro set before being combined.
 
 **Feasibility Score** (can it be built without subsidy):
 - Achievable Rent (monthly) = (0.30 × AMI% × Area Median Income) / 12
-- Land Cost/Unit = Land cost per acre ÷ assumed units per acre (density/zoning tier)
-- Hard Cost/Unit = Construction $/SF × Unit Size (SF)
+- Land Cost/Unit = Land cost per acre ÷ assumed units per acre (density/zoning tier) — editable per metro in Metro Breakdown
+- Hard Cost/Unit = Construction $/SF × Unit Size (SF) — construction $/SF editable per metro in Metro Breakdown
 - Soft Costs = 20% default × (Land Cost/Unit + Hard Cost/Unit)
 - Development Cost/Unit = Land + Hard + Soft
 - Effective Gross Income = Achievable Rent × 12 × (1 − Vacancy/Collection Loss %)
@@ -53,22 +76,34 @@ current metro set before being combined.
 **Opportunity Score** = α·Shortage + β·Feasibility, α+β=1, default 0.5/0.5, user-adjustable.
 
 **Homebuyer add-on**: standard amortization M = P[r(1+r)ⁿ]/[(1+r)ⁿ−1] at
-note rate vs. a 2-1 temporary buy-down, showing the payment delta.
-Illustrative only, not a loan product.
+note rate, compared against either a temporary step-down buy-down (3-2-1,
+2-1, 1-1, or 1-0) or a permanent discount-points buy-down. Illustrative
+only, not a loan product.
 
 The exact formulas are implemented in `scoring.py` and `finance.py`.
+
+### Editable land & hard cost overrides
+
+Land cost/acre and construction cost/SF are the two Feasibility inputs the
+charter flags as having no free public source (they're always synthetic —
+see **Data sources & what's synthetic** below). The Metro Breakdown tab lets
+you override either value for the metro you're viewing with your own
+market-sourced number; every score on that page — including the sub-metro
+rings — recomputes from the override, re-ranked against the other 149
+metros' baseline estimates. The Ranked Table tab always shows the baseline
+(non-overridden) scores, so an overridden metro's rank on Metro Breakdown may
+differ slightly from its rank on the Ranked Table.
 
 ### Sub-metro zoom-in rings
 
 Site selection happens below the metro level, so the Metro Breakdown tab
 also scores four illustrative submarket rings *within* the selected metro:
 Urban Core, Inner Suburbs, Outer Suburbs, and Exurban / Micropolitan Fringe.
-Every metro uses the same four generic rings rather than specific named
-places or counties — there is no free, sub-metro-level public dataset for
-the feasibility-side inputs (same reason those fields are synthetic at the
-metro level), and fabricating precise county/neighborhood detail for 50
-metros without a verified source would trade a defensible estimate for an
-unverifiable one.
+Every metro uses the same four generic rings rather than custom-drawn
+boundaries — there is no free, sub-metro-level public dataset for the
+feasibility-side cost inputs (same reason those fields are synthetic at the
+metro level), so a fixed, consistent ring structure is used as a comparable
+yardstick across all 150 metros instead of a custom-fit boundary per metro.
 
 Each ring applies documented, real-estate-standard core-vs-periphery
 adjustments to the parent metro's data (see `pipeline/subareas.py` for the
@@ -78,18 +113,93 @@ slightly; HUD Area Median Income is held constant across rings (HUD
 publishes one income-limit schedule per metro), so only the cost side of
 the feasibility math changes ring to ring, not the achievable-rent side.
 Shortage/Feasibility/Opportunity scores for the four rings are z-scored
-*within that one metro's four rings*, not against the national 50-metro
+*within that one metro's four rings*, not against the national 150-metro
 set — they answer "which ring is relatively best to site in, within this
 metro," not "how does this ring compare to a different metro."
 
 Below the ring table/chart, the Metro Breakdown tab also plots the metro's
-home state (drawn offline -- see `pipeline/geo_shapes.py`) with a star at
+home state (drawn offline — see `pipeline/geo_shapes.py`) with a star at
 the metro's center and the four rings as concentric shaded bands around it
 (via `pipeline.subareas.ring_circle_points`), colored by each ring's local
-Opportunity Score. Ring radii (8 / 20 / 40 / 70 miles) are fixed, stylized
-bands applied the same way to every metro -- they visualize "closer in vs.
-farther out," not a surveyed commute-shed or neighborhood boundary for any
-specific place.
+Opportunity Score.
+
+**Ring radii — how they were chosen.** The four rings use fixed radii — 8 /
+20 / 40 / 70 miles — applied the same way to every metro. They are not
+measured per metro from commute survey data, traffic patterns, or each
+metro's actual CBSA boundary; they're a planning-literature-informed
+heuristic for a typical mid-to-large U.S. metro, chosen as a consistent
+yardstick so every metro is comparable:
+
+- **Urban Core (0-8 mi):** roughly the walkable/dense downtown and
+  immediately adjacent neighborhoods of the principal city.
+- **Inner Suburbs (8-20 mi):** roughly a 15-30 minute drive commute shed in
+  most metros.
+- **Outer Suburbs (20-40 mi):** extends to roughly the edge of a typical
+  metro's continuously built-up suburban area.
+- **Exurban / Micropolitan Fringe (40-70 mi):** commuter-shed overflow and
+  satellite towns beyond that, out to where it stops being a plausible
+  same-metro commute for most people.
+
+These bands fit sprawling Sunbelt metros better than compact Northeast
+metros hemmed in by geography or water — that's an accepted tradeoff for
+having one consistent, comparable measure across all 150 metros rather than
+a custom-fit boundary for each one. See the exact bounds in
+`pipeline/subareas.ring_bounds_miles()`.
+
+**Counties within each ring.** Each ring also lists the real Census county
+names whose approximate center falls within that ring's distance band from
+the metro's center point, computed with the haversine great-circle distance
+formula (`pipeline/geo_shapes.py: counties_by_ring`). A county's "center" is
+approximated as its bounding-box midpoint (not a precise area centroid, to
+avoid adding a geometry dependency) — documented as a known approximation. A
+ring can legitimately come up empty, since counties are large administrative
+units: a tight ring like Urban Core (0-8 mi) often has no county center that
+close, even though the metro's downtown is in a county that extends into it.
+County boundary geometry comes from the Census cartographic boundary
+shapefile bundled by the `plotly-geo` PyPI package — no network access is
+needed to compute this.
+
+### Metro Comparison
+
+Click "➕ Add to Comparison" on any metro's Metro Breakdown page to add it to
+a running shortlist (kept in the session only, not saved between visits).
+The Metro Comparison tab shows every added metro side-by-side: a grouped bar
+chart of Opportunity/Shortage/Feasibility scores, and a full transposed
+table of every underlying metric, downloadable as CSV. Metros can be removed
+individually or cleared all at once.
+
+## Buy-Down Calculator: financing types
+
+The calculator supports six financing types, selectable under "Financing
+type":
+
+| Type | Structure |
+|---|---|
+| Standard Fixed | Standard fixed-rate amortization at the note rate, no buydown |
+| 3-2-1 Buydown | Rate is 3 points below note in year 1, 2 points below in year 2, 1 point below in year 3, note rate from year 4 on |
+| 2-1 Buydown | Rate is 2 points below note in year 1, 1 point below in year 2, note rate from year 3 on |
+| 1-1 Buydown | Rate is 1 point below note, flat, for years 1-2, note rate from year 3 on |
+| 1-0 Buydown | Rate is 1 point below note for year 1 only, note rate from year 2 on |
+| Permanent Buydown (Discount Points) | Points purchased upfront (1 point = 1% of loan amount) permanently lower the rate by ~0.25 points per point (standard industry rule of thumb), for the full loan term; the app also computes the breakeven period (months to recoup the points cost from the monthly savings) |
+
+All temporary buydown math floors the discounted rate at 0% and correctly
+truncates the step-down schedule to fit loan terms shorter than the
+structure's own length (e.g. a 3-2-1 buydown on a 2-year term only shows
+years 1-2). All six types are implemented in `finance.py` and covered by
+unit tests in `tests/test_scoring.py`.
+
+### Note rate: illustrative benchmark presets
+
+The "Rate preset (illustrative benchmark)" dropdown offers typical current
+rates by loan type (30-Year Fixed, 15-Year Fixed, FHA, VA, Jumbo, 5/1 ARM) so
+the calculator looks grounded in real market pricing rather than an
+arbitrary default. **These are illustrative benchmark numbers, not a live
+feed** — this app has no way to fetch a real-time rate from Mortgage News
+Daily or anywhere else from this sandbox (see **Network access** below).
+Selecting a preset fills in the Note Rate field, which remains fully
+editable; a "Custom" option and a direct link to
+[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) are provided so
+users can look up today's actual rate and enter it themselves.
 
 ## Data sources & what's synthetic
 
@@ -97,35 +207,60 @@ Per the charter, real inputs are pulled from **public APIs and bulk data
 files only** — Census, ACS, Census Building Permits Survey (BPS), FRED, FHFA
 HPI, and Zillow Research (ZHVI/ZORI). CoStar/RCA are explicitly not used.
 
+Every field carries one of **three** provenance labels — conflating them
+would misrepresent the data:
+
+- 🟢 **live** — fetched from the source API this session.
+- 🔵 **published** — a real, publicly-published statistic (Census ACS), not
+  modeled or guessed, but not re-fetched live this run.
+- 🟠 **synthetic** — a modeled estimate; no free, metro-level public source
+  exists for this field at all.
+
 | Field group | Source | Status |
 |---|---|---|
-| Population growth, median household income, median home price, vacancy rates, 3yr rent growth | Census ACS / PEP, Zillow ZORI | Live-eligible (`pipeline/fetch_census.py`, `pipeline/fetch_zillow.py`) |
-| Permits per 1,000 units | Census Building Permits Survey | Live-eligible (`pipeline/fetch_permits.py`) |
+| Median home price, median household income (and the Price-to-Income Ratio computed from them) | Census ACS, real published figures | **Published** (`pipeline/anchors.py`) — live-eligible, overwritten by a live pull when one runs, but real and not synthetic even before that |
+| Population growth, vacancy rates, 3yr rent growth, 3yr income growth | Census ACS / PEP, Zillow ZORI | Live-eligible (`pipeline/fetch_census.py`, `pipeline/fetch_zillow.py`) — synthetic fallback until a live refresh runs |
+| Permits per 1,000 units | Census Building Permits Survey | Live-eligible (`pipeline/fetch_permits.py`) — synthetic fallback until a live refresh runs |
 | Home price growth (cross-check) | FHFA HPI | Live-eligible (`pipeline/fetch_fhfa.py`) |
 | 10-yr Treasury (cap-rate benchmark) | FRED DGS10 | Live-eligible (`pipeline/fetch_fred.py`) |
-| Land cost/acre, construction $/SF, cap rate, operating expenses/unit, vacancy/collection loss %, units/acre, permit velocity | — | **Always synthetic** — no free, metro-level public source exists (per charter) |
+| Land cost/acre, construction $/SF, cap rate, operating expenses/unit, vacancy/collection loss %, units/acre, permit velocity, AMI | — | **Always synthetic** — no free, metro-level public source exists (per charter); AMI is derived from the published income anchor with modeled noise |
 
 "Live-eligible" fields fall back to a tier-calibrated synthetic estimate
 (`pipeline/synthetic.py`) whenever a live pull fails, is rate-limited, or the
 pipeline is run without network access. The app's **Data Sources** tab shows,
-per field, whether the value currently on screen is `live` or `synthetic`.
+per field, whether the value currently on screen is `live`, `published`, or
+`synthetic`.
 
-### Why the bundled dataset is synthetic today
+### Why median home price & household income are "published," not synthetic
+
+Earlier versions of this app treated median home price and median household
+income as synthetic, which produced a self-contradictory Price-to-Income
+Ratio (a "shortage" signal computed from two numbers the app itself admitted
+were made up). That's fixed: `pipeline/anchors.py` now carries real,
+Census-ACS-grounded median home price and household income figures for all
+150 metros, tagged `published` rather than `synthetic`. They are real
+numbers, not live-refetched every run — treat them as directionally
+accurate, not penny-precise, until a live refresh actually runs (see
+**Scheduled batch refresh** below). The Price-to-Income Ratio computed from
+them is correspondingly a real number, not a synthetic one.
+
+### Why most other fields are still synthetic today
 
 This app ships with `data/metro_dataset.csv` already generated so it works
 immediately with zero setup. It was built by running
 `python -m pipeline.build_dataset` in a development sandbox whose outbound
 network access is restricted to a small allowlist (PyPI, npm, GitHub, etc.) —
-Census, Zillow, FHFA, and FRED are not reachable from there, so every field
-fell back to the synthetic generator. The live-fetch code is fully
-implemented and will populate real values the moment it runs somewhere with
-normal internet access (a laptop, CI, or a Render service/cron job) — see
+Census, Zillow, FHFA, FRED, and Mortgage News Daily are not reachable from
+there, so every live-eligible field (other than the published anchors) fell
+back to the synthetic generator. The live-fetch code is fully implemented
+and will populate real values the moment it runs somewhere with normal
+internet access (a laptop, CI, or a Render service/cron job) — see
 **Scheduled batch refresh** below.
 
 Synthetic values are not random noise: each metro is tagged with a regional
 tier (`superstar_coastal`, `sunbelt_growth`, `midwest_legacy`,
 `mixed_northeast_midatlantic` — see `metros.py`), and every generated field
-is drawn from a tier-calibrated distribution anchored to real, well-known
+is drawn from a tier-calibrated distribution anchored to the real published
 median home price / household income figures per metro (`pipeline/anchors.py`),
 so the cross-metro pattern (expensive/tight coastal metros, high-growth
 Sunbelt metros, low-cost Midwest metros) looks like a real market
@@ -136,21 +271,22 @@ such everywhere in the app.
 
 ```
 app.py                      Streamlit app (entry point)
-metros.py                   Top-50 metro reference table (CBSA, lat/lon, tier)
+metros.py                   150-metro reference table (CBSA, lat/lon, tier)
 scoring.py                  Shortage / Feasibility / Opportunity score formulas
-finance.py                  Mortgage amortization + 2-1 buy-down calculator
+finance.py                  Mortgage amortization + temporary/permanent buy-down calculators
 pipeline/
-  anchors.py                 Real home-price/income anchors used by the synthetic generator
+  anchors.py                 Real, published home-price/income anchors for all 150 metros
   synthetic.py                Tier-calibrated synthetic data generator + density/AMI tier constants
   fetch_census.py             Live Census ACS / PEP pulls
   fetch_permits.py            Live Census Building Permits Survey pulls
   fetch_fhfa.py                Live FHFA HPI pulls
   fetch_zillow.py              Live Zillow ZORI/ZHVI bulk CSV pulls
   fetch_fred.py                 Live FRED series pulls
-  subareas.py                  Sub-metro submarket ring generator (Urban Core / Inner Suburbs / Outer Suburbs / Exurban Fringe)
-  build_dataset.py             Orchestrator: live-first, synthetic-fallback, writes data/metro_dataset.csv
-data/metro_dataset.csv        Bundled dataset (50 metros) shipped with the app
-tests/test_scoring.py         Unit tests for scoring math and finance calculator
+  subareas.py                  Sub-metro submarket ring generator + ring_bounds_miles()
+  geo_shapes.py                 Offline state/county shapefile rendering + counties_by_ring()
+  build_dataset.py             Orchestrator: live-first, published/synthetic-fallback, writes data/metro_dataset.csv
+data/metro_dataset.csv        Bundled dataset (150 metros) shipped with the app
+tests/test_scoring.py         Unit tests for scoring math, finance calculators, and geo helpers
 render.yaml                  Render Blueprint (web service + optional weekly refresh cron job)
 requirements.txt
 ```
@@ -164,7 +300,7 @@ pip install -r requirements.txt
 
 # (optional) regenerate the dataset -- synthetic-only by default:
 python -m pipeline.build_dataset
-# or attempt a live pull first, falling back to synthetic per-field:
+# or attempt a live pull first, falling back to published/synthetic per-field:
 ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset
 
 streamlit run app.py
@@ -173,16 +309,17 @@ streamlit run app.py
 Then open the URL Streamlit prints (defaults to http://localhost:8501).
 
 **Note on the maps**: both the national map and the per-metro state map
-render state boundaries from an **offline** shapefile (`cb_2016_us_state_500k`,
+render state (and, for the county-ring listings, county) boundaries from an
+**offline** shapefile (`cb_2016_us_state_500k` / `cb_2016_us_county_500k`,
 bundled by the `plotly-geo` PyPI package) via `pipeline/geo_shapes.py`, not
 from Plotly's default `scope="usa"` geo trace. That default fetches basemap
 shapes from Plotly's public CDN (`cdn.plot.ly`) at render time, which failed
 outright in this project's restricted-egress dev sandbox and would fail the
 same way for any viewer whose network blocks that CDN (a locked-down
-corporate proxy, for instance). Building the state polygons from local
-shapefile data instead removes that dependency entirely -- neither map
-needs any network access to render. See `pipeline/geo_shapes.py` for how
-the shapefile is read and simplified.
+corporate proxy, for instance). Building the polygons from local shapefile
+data instead removes that dependency entirely -- no map or county listing
+needs any network access to render. See `pipeline/geo_shapes.py` for how the
+shapefile is read and simplified.
 
 Run the test suite with:
 
@@ -234,24 +371,46 @@ The pipeline code itself (`pipeline/build_dataset.py`) is refresh-mechanism
 agnostic — it just needs to run somewhere with network access and write to
 `data/metro_dataset.csv`.
 
+### Network access
+
+This development sandbox's outbound network access is restricted to a small
+allowlist (PyPI, npm, GitHub, etc.). Census, Zillow, FHFA, FRED, and Mortgage
+News Daily are all unreachable from inside it (confirmed directly). That is
+why:
+
+- `data/metro_dataset.csv` ships with published anchors but otherwise
+  synthetic live-eligible fields (see **Data sources & what's synthetic**),
+  and
+- the Buy-Down Calculator's rate dropdown offers illustrative benchmark
+  presets with a link to check live rates yourself, instead of pulling a
+  live feed.
+
+None of this is a limitation of the live-fetch code itself, which is fully
+implemented in `pipeline/fetch_*.py` — it will populate real, live data the
+moment `ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset` runs somewhere
+with normal internet access.
+
 ## MVP scope (per charter)
 
-**In:** top 20+ U.S. metros; Shortage, Feasibility, Opportunity scores;
-ranked table and map; per-metro score breakdown; α/β and AMI-tier
-configuration sliders; buy-down calculator; scheduled batch data refresh.
-The final product covers all top 50 U.S. metros (this app defaults to 50,
-with a toggle back to 20).
+**In:** 150 U.S. metros; Shortage, Feasibility, Opportunity scores; ranked
+table (with tooltips) and map; per-metro score breakdown with editable cost
+overrides and real county-ring detail; Metro Comparison; α/β and AMI-tier
+configuration sliders; buy-down calculator with multiple financing
+structures and illustrative rate presets; scheduled batch data refresh.
 
-**Deferred:** sub-metro/parcel-level siting; licensed CoStar/RCA integration;
-live (real-time) data refresh; full underwriting outputs (IRR, debt sizing);
-actual loan origination workflow; coverage beyond top 50 metros; developer
-user accounts for personalization.
+**Deferred:** parcel-level siting (below the county-ring level); licensed
+CoStar/RCA integration; live (real-time) rate feed from Mortgage News Daily
+or any other source; full underwriting outputs (IRR, debt sizing); actual
+loan origination workflow; developer user accounts for personalization.
 
 ## Disclaimer
 
 This tool is a screening aid for illustrative and educational purposes. It is
 not investment, financial, or legal advice, and the buy-down calculator is
-not a loan product or offer of credit. Feasibility-side inputs (land cost,
-construction cost, cap rate, operating expenses, vacancy/collection loss, and
-permit velocity) are synthetic estimates, not observed market data — always
-validate with a full local pro forma before making a development decision.
+not a loan product, rate quote, or offer of credit. Feasibility-side inputs
+(land cost, construction cost, cap rate, operating expenses, vacancy/collection
+loss, and permit velocity) are synthetic estimates, not observed market data
+— always validate with a full local pro forma before making a development
+decision. Buy-down rate presets are illustrative benchmarks, not a live feed
+or a rate quote — check a live source (e.g. mortgagenewsdaily.com) and your
+lender for actual current rates and pricing.
