@@ -12,8 +12,16 @@ with a per-metro deterministic seed (derived from the CBSA code) so the
 dataset is reproducible and every run of the pipeline yields the same
 numbers until the anchors/params below are deliberately changed.
 
-Nothing here should be mistaken for observed data -- the app always labels
-these columns' provenance as "synthetic" in the UI (see app.py).
+Two of the fields generated here are NOT modeled estimates, even when a
+live fetch hasn't run: `median_home_price_usd` and
+`median_household_income_usd` are seeded from pipeline/anchors.py, which
+holds real published figures (grounded in Census ACS statistics), not
+guesses -- see that module's docstring. The app's Data Sources tab (and
+PUBLISHED_FIELDS below) label those two fields' provenance as "published"
+rather than "synthetic" for exactly this reason: they're real numbers that
+weren't live-fetched this run, not modeled approximations. Every other
+field generated here genuinely is a modeled estimate and is labeled
+"synthetic" in the UI (see app.py).
 """
 
 from __future__ import annotations
@@ -21,7 +29,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from metros import TOP_50_METROS, SUPERSTAR_COASTAL, SUNBELT_GROWTH, MIDWEST_LEGACY, MIXED_NORTHEAST
+from metros import ALL_METROS, SUPERSTAR_COASTAL, SUNBELT_GROWTH, MIDWEST_LEGACY, MIXED_NORTHEAST
 from pipeline.anchors import ANCHORS
 
 # (mean, std) per tier for every generated field.
@@ -103,15 +111,19 @@ def _rng_for(cbsa: str) -> np.random.Generator:
 
 
 def generate_synthetic_dataset() -> pd.DataFrame:
-    """Build the full 50-metro synthetic fallback dataset.
+    """Build the full metro fallback dataset (150 metros).
 
-    Every numeric column produced here is a deterministic, tier-calibrated
-    draw -- not observed data. `build_dataset.py` overwrites any column it
-    can obtain from a live source with real values and flips that column's
-    entry in `_source_flags` from "synthetic" to "live".
+    Most columns produced here are a deterministic, tier-calibrated draw --
+    not observed data. The two exceptions are `median_home_price_usd` and
+    `median_household_income_usd`, seeded from the real published anchors
+    in pipeline/anchors.py (see that module and the docstring above).
+    `build_dataset.py` overwrites any column it can obtain from a live
+    source with freshly-fetched values and flips that column's provenance
+    to "live"; see PUBLISHED_FIELDS / SYNTHETIC_ONLY_FIELDS below for how
+    the rest are labeled when no live fetch has run.
     """
     rows = []
-    for m in TOP_50_METROS:
+    for m in ALL_METROS:
         rng = _rng_for(m.cbsa)
         params = TIER_PARAMS[m.tier]
         home_price, household_income = ANCHORS[m.cbsa]
@@ -138,24 +150,40 @@ def generate_synthetic_dataset() -> pd.DataFrame:
         rows.append(row)
 
     df = pd.DataFrame(rows)
-    df["data_vintage"] = "synthetic-2024-estimate"
+    df["data_vintage"] = "published-anchors-2023-ACS-vintage"
     return df
 
 
 SYNTHETIC_ONLY_FIELDS = {
     # per the charter, these are flagged synthetic regardless of network
-    # access because no free, metro-level public source exists for them
+    # access because no free, metro-level public source exists for them --
+    # genuinely modeled estimates, not real observed figures
     "land_cost_per_acre_usd",
     "construction_cost_per_sf_usd",
     "vacancy_collection_loss_pct",
     "operating_expense_per_unit_usd",
     "cap_rate_pct",
     "permit_velocity_index",
+    "ami_usd",  # derived from the real income anchor with modeled noise
+}
+
+# Real, published figures (not modeled) that simply weren't fetched live
+# this run -- see pipeline/anchors.py. Provenance shows as "published",
+# distinct from the genuinely-modeled SYNTHETIC_ONLY_FIELDS above, because
+# conflating "no real data source exists" with "real data exists but
+# wasn't live-fetched this session" under one "synthetic" label was
+# misleading (it made an actual published statistic look fabricated).
+PUBLISHED_FIELDS = {
+    "median_home_price_usd",
+    "median_household_income_usd",
 }
 
 LIVE_ELIGIBLE_FIELDS = {
     # these can in principle be pulled live from Census/ACS/FHFA/Zillow/FRED
-    # (see pipeline/fetch_*.py); synthetic values here are only a fallback
+    # (see pipeline/fetch_*.py); when no live fetch has run, fields in
+    # PUBLISHED_FIELDS fall back to real published anchors (provenance
+    # "published"), and the rest fall back to modeled estimates
+    # (provenance "synthetic") -- see build_dataset.py.
     "pop_cagr_pct",
     "permits_per_1000_cagr_pct",
     "rental_vacancy_pct",
@@ -164,5 +192,4 @@ LIVE_ELIGIBLE_FIELDS = {
     "median_household_income_usd",
     "rent_growth_3yr_pct",
     "income_growth_3yr_pct",
-    "ami_usd",
 }

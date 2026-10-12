@@ -40,11 +40,31 @@ SUBAREA_TIERS = [
     "Exurban / Micropolitan Fringe",
 ]
 
-# Illustrative outer radius (miles from the metro's principal-city point) for
-# each ring, used only for the schematic map in the app -- these are
-# stylized, evenly-applied bands for visualizing "closer in vs. farther out"
-# across every metro consistently, not surveyed commute-shed or MSA-boundary
-# distances for any specific place.
+# Illustrative outer radius (miles from the metro's principal-city point)
+# for each ring, used for both the schematic map circles and the real
+# county-membership listing in the app. These are FIXED, stylized bands
+# applied identically to every metro -- not measured per metro from any
+# commute-shed survey, traffic data, or the metro's actual CBSA boundary.
+#
+# How the specific numbers (8 / 20 / 40 / 70 miles) were chosen: they're a
+# planning-literature-informed heuristic for a typical mid-to-large U.S.
+# metro, not a data-derived fit --
+#   - Urban Core (0-8 mi): roughly the walkable/dense downtown and
+#     immediately adjacent neighborhoods of a typical principal city.
+#   - Inner Suburbs (8-20 mi): roughly a 15-30 minute drive commute shed
+#     in most metros -- the built-up area that reads as "inner suburb"
+#     rather than downtown.
+#   - Outer Suburbs (20-40 mi): extends to roughly the edge of a typical
+#     mid-to-large metro's continuously built-up suburban area.
+#   - Exurban / Micropolitan Fringe (40-70 mi): the commuter-shed overflow
+#     and small satellite towns beyond that, out to where it stops being
+#     a plausible same-metro commute for most people.
+# These bands necessarily fit some metros (sprawling Sunbelt metros,
+# especially) better than others (compact Northeast metros hemmed in by
+# geography) -- they're a consistent, comparable yardstick applied the
+# same way everywhere, not a custom-fit boundary for any one metro. The
+# app's Metro Breakdown tab surfaces this explanation directly, not just
+# in code comments.
 RING_OUTER_RADIUS_MILES: dict[str, float] = {
     "Urban Core": 8.0,
     "Inner Suburbs": 20.0,
@@ -53,6 +73,17 @@ RING_OUTER_RADIUS_MILES: dict[str, float] = {
 }
 
 MILES_PER_DEGREE_LAT = 69.0
+
+
+def ring_bounds_miles() -> dict[str, tuple[float, float]]:
+    """Each ring's (inner_radius, outer_radius) in miles, inner ring first."""
+    bounds = {}
+    lo = 0.0
+    for tier in SUBAREA_TIERS:
+        hi = RING_OUTER_RADIUS_MILES[tier]
+        bounds[tier] = (lo, hi)
+        lo = hi
+    return bounds
 
 
 def ring_circle_points(center_lat: float, center_lon: float, radius_miles: float, n: int = 72):

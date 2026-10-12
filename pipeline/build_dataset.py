@@ -11,7 +11,9 @@ Usage:
     ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset   # attempt live pulls first
 
 Output: data/metro_dataset.csv, plus a `<field>__source` column for every
-live-eligible field recording "live" or "synthetic".
+live-eligible field recording "live", "published" (real anchor data that
+wasn't live-fetched this run -- see pipeline/anchors.py), or "synthetic"
+(modeled estimate, no free public source exists).
 
 In this development sandbox, outbound network access to Census/Zillow/FHFA/
 FRED is blocked by the environment's egress policy, so ENABLE_LIVE_FETCH
@@ -31,13 +33,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from metros import TOP_50_METROS  # noqa: E402
-from pipeline.synthetic import generate_synthetic_dataset, LIVE_ELIGIBLE_FIELDS  # noqa: E402
+from metros import ALL_METROS  # noqa: E402
+from pipeline.synthetic import generate_synthetic_dataset, LIVE_ELIGIBLE_FIELDS, PUBLISHED_FIELDS  # noqa: E402
 
 # Zillow's metro files key on "City, ST" region names -- map those onto our
 # CBSA codes. Kept close to metros.short_name but Zillow's naming can
 # diverge slightly (e.g. it drops the second city in "Dallas-Fort Worth").
-NAME_TO_CBSA = {m.short_name: m.cbsa for m in TOP_50_METROS}
+NAME_TO_CBSA = {m.short_name: m.cbsa for m in ALL_METROS}
 ZILLOW_NAME_OVERRIDES = {
     "Dallas-Fort Worth, TX": "Dallas, TX",
     "Washington, DC": "Washington, DC",
@@ -107,10 +109,11 @@ def build(enable_live: bool | None = None) -> pd.DataFrame:
     synthetic = generate_synthetic_dataset()
     cbsas = synthetic["cbsa"].tolist()
 
-    # every live-eligible field starts flagged synthetic; live pulls (if any
-    # succeed) overwrite both the value and the flag below
+    # every live-eligible field starts flagged "published" (real anchor
+    # data, see pipeline/anchors.py) or "synthetic" (modeled estimate);
+    # live pulls (if any succeed) overwrite both the value and the flag
     for field in LIVE_ELIGIBLE_FIELDS:
-        synthetic[f"{field}__source"] = "synthetic"
+        synthetic[f"{field}__source"] = "published" if field in PUBLISHED_FIELDS else "synthetic"
     for field in synthetic.columns:
         if field.endswith("__source"):
             continue
@@ -132,7 +135,7 @@ def build(enable_live: bool | None = None) -> pd.DataFrame:
     synthetic["data_vintage"] = (
         "live-refresh-" + datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if enable_live
-        else "synthetic-2024-estimate"
+        else "published-anchors-2023-ACS-vintage"
     )
     return synthetic
 
@@ -145,14 +148,15 @@ def main() -> None:
     out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "metro_dataset.csv")
     df.to_csv(out_path, index=False)
 
-    n_live = sum(
-        (df[c] == "live").sum() for c in df.columns if c.endswith("__source")
-    )
-    n_total = sum(
-        len(df) for c in df.columns if c.endswith("__source")
-    )
+    source_cols = [c for c in df.columns if c.endswith("__source")]
+    n_total = len(df) * len(source_cols)
+    n_live = sum((df[c] == "live").sum() for c in source_cols)
+    n_published = sum((df[c] == "published").sum() for c in source_cols)
     print(f"[build_dataset] wrote {len(df)} metros to {out_path}")
-    print(f"[build_dataset] live-sourced values: {n_live}/{n_total} field-metro cells")
+    print(
+        f"[build_dataset] live: {n_live}/{n_total}, published: {n_published}/{n_total}, "
+        f"synthetic: {n_total - n_live - n_published}/{n_total} field-metro cells"
+    )
 
 
 if __name__ == "__main__":

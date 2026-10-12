@@ -17,13 +17,14 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from metros import metros_frame
-from pipeline.geo_shapes import state_rings, national_background_rings
+from pipeline.geo_shapes import state_rings, national_background_rings, counties_by_ring
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
 from pipeline.subareas import (
     generate_subarea_dataset,
     SUBAREA_TIERS,
     RING_OUTER_RADIUS_MILES,
     ring_circle_points,
+    ring_bounds_miles,
     MILES_PER_DEGREE_LAT,
 )
 from scoring import (
@@ -33,7 +34,12 @@ from scoring import (
     DEFAULT_UNIT_SIZE_SF,
     DEFAULT_SOFT_COST_PCT,
 )
-from finance import two_one_buydown
+from finance import (
+    monthly_payment,
+    temporary_buydown,
+    permanent_buydown,
+    TEMPORARY_BUYDOWN_STRUCTURES,
+)
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
@@ -74,11 +80,6 @@ def normalized_weights(raw: dict[str, float]) -> dict[str, float]:
 
 # ---------------------------------------------------------------- sidebar --
 st.sidebar.title("Model Controls")
-
-n_metros = st.sidebar.radio(
-    "Metro universe", options=[20, 50], index=1, horizontal=True,
-    help="MVP scope is the top 20 metros; the full product covers the top 50.",
-)
 
 st.sidebar.markdown("### Opportunity Score weighting")
 alpha = st.sidebar.slider(
@@ -128,7 +129,8 @@ st.sidebar.caption(
 
 # ------------------------------------------------------------------ data --
 raw = load_data()
-raw = raw.sort_values("population", ascending=False).head(n_metros).reset_index(drop=True)
+raw = raw.sort_values("population", ascending=False).reset_index(drop=True)
+n_metros = len(raw)
 
 scored = score_metros(
     raw,
@@ -154,22 +156,34 @@ st.markdown(
 )
 st.caption(f"Data vintage: `{data_vintage}` · Metro universe: top {n_metros} U.S. metros by population")
 
-if "synthetic" in str(data_vintage):
+if "live-refresh" not in str(data_vintage):
     st.info(
-        "This deployment is running on the bundled **synthetic snapshot** dataset "
-        "(no live network pull has been run yet). Shortage-side fields "
-        "(population growth, vacancy, home prices, income, rents) are wired "
-        "to pull live from Census/ACS/Zillow/FHFA -- see the **Data Sources** "
-        "tab and README for how to trigger a live refresh. Feasibility-side "
-        "fields (land cost, construction $/SF, cap rate, opex, vacancy/"
-        "collection loss, permit velocity) are **always synthetic estimates**, "
-        "per the project charter, since no free public source covers them "
-        "at metro granularity.",
+        "This deployment has not run a live network pull yet, so three "
+        "levels of data provenance are in play -- see the **Data Sources** "
+        "tab for the full field-by-field breakdown. **Published**: median "
+        "home price and median household income are real figures grounded "
+        "in Census ACS statistics (not modeled), just not fetched live this "
+        "run -- the Price-to-Income Ratio is computed from these, so it's a "
+        "real number. **Live-eligible**: population growth, permits, "
+        "vacancy, and rent/income growth are wired to pull live from "
+        "Census/ACS/Zillow/FHFA -- see the README for how to trigger a "
+        "refresh -- and fall back to modeled estimates otherwise. "
+        "**Always synthetic**: land cost, construction $/SF, cap rate, "
+        "opex, vacancy/collection loss, and permit velocity are modeled "
+        "estimates regardless of network access, per the project charter, "
+        "since no free public source covers them at metro granularity.",
         icon="ℹ️",
     )
 
-tab_rank, tab_map, tab_breakdown, tab_buydown, tab_sources = st.tabs(
-    ["\U0001F4CA Ranked Table", "\U0001F5FA️ Map", "\U0001F50D Metro Breakdown", "\U0001F3E1 Buy-Down Calculator", "\U0001F4C1 Data Sources"]
+if "comparison_metros" not in st.session_state:
+    st.session_state.comparison_metros = []
+
+tab_rank, tab_map, tab_breakdown, tab_compare, tab_buydown, tab_sources = st.tabs(
+    [
+        "\U0001F4CA Ranked Table", "\U0001F5FA️ Map", "\U0001F50D Metro Breakdown",
+        f"\U0001F4CB Metro Comparison ({len(st.session_state.comparison_metros)})",
+        "\U0001F3E1 Buy-Down Calculator", "\U0001F4C1 Data Sources",
+    ]
 )
 
 # ------------------------------------------------------------- ranked table --
@@ -192,14 +206,60 @@ with tab_rank:
         hide_index=True,
         height=560,
         column_config={
-            "Opportunity": st.column_config.ProgressColumn(
-                "Opportunity", min_value=0, max_value=100, format="%.1f"
+            "Rank": st.column_config.NumberColumn(
+                "Rank", help="Position when sorted by Opportunity Score, highest first.",
             ),
-            "Shortage": st.column_config.NumberColumn("Shortage", format="%.1f"),
-            "Feasibility": st.column_config.NumberColumn("Feasibility", format="%.1f"),
-            "Price/Income": st.column_config.NumberColumn("Price/Income", format="%.2f×"),
+            "Metro": st.column_config.TextColumn(
+                "Metro", help="U.S. metro area (Core-Based Statistical Area), \"principal city, state\".",
+            ),
+            "State": st.column_config.TextColumn(
+                "State", help="Principal state of the metro area.",
+            ),
+            "Opportunity": st.column_config.ProgressColumn(
+                "Opportunity", min_value=0, max_value=100, format="%.1f",
+                help=(
+                    "Opportunity = α×Shortage + β×Feasibility (α/β set in the sidebar, "
+                    "default 0.5/0.5). 0-100 scale, z-scored and normalized across the "
+                    "current metro set -- higher means a more promising combination of "
+                    "need and buildability."
+                ),
+            ),
+            "Shortage": st.column_config.NumberColumn(
+                "Shortage", format="%.1f",
+                help=(
+                    "How undersupplied this metro is. Combines Permit Gap, Vacancy "
+                    "Tightness, Price-to-Income Ratio, and Rent-Income Divergence "
+                    "(each z-scored across metros, weighted per the sidebar's "
+                    "Shortage component weights, then normalized 0-100). Higher = "
+                    "more acute shortage signal."
+                ),
+            ),
+            "Feasibility": st.column_config.NumberColumn(
+                "Feasibility", format="%.1f",
+                help=(
+                    "Whether affordable development pencils without subsidy. Combines "
+                    "the Feasibility Gap (Supportable Value minus Development Cost) and "
+                    "Permit Velocity, at the sidebar's AMI tier, density tier, and unit "
+                    "size (z-scored, weighted, normalized 0-100). Higher = easier to "
+                    "build without subsidy."
+                ),
+            ),
+            "Price/Income": st.column_config.NumberColumn(
+                "Price/Income", format="%.2f×",
+                help=(
+                    "Price-to-Income Ratio = median home price ÷ median household "
+                    "income. One of the four Shortage Score components; higher means "
+                    "less affordable relative to local income."
+                ),
+            ),
             "Feasibility Gap ($/unit)": st.column_config.NumberColumn(
-                "Feasibility Gap ($/unit)", format="$%,.0f"
+                "Feasibility Gap ($/unit)", format="$%,.0f",
+                help=(
+                    "Supportable Value minus Development Cost, per unit, at the "
+                    "sidebar's current AMI tier, density tier, and unit size. Positive "
+                    "= buildable without subsidy at those assumptions; negative = would "
+                    "need one. See the Metro Breakdown tab for the full cost waterfall."
+                ),
             ),
         },
     )
@@ -263,10 +323,72 @@ with tab_breakdown:
     metro_choice = st.selectbox("Choose a metro", options=scored["metro"].tolist())
     row = scored[scored["metro"] == metro_choice].iloc[0]
 
-    c1, c2, c3 = st.columns(3)
+    with st.expander("✏️ Override land & hard costs for this metro", expanded=False):
+        st.caption(
+            "Land cost/acre and construction cost/SF are the two inputs the "
+            "charter flags as having no free public source (see the Data "
+            "Sources tab) -- the baseline below is a modeled estimate. Plug "
+            "in your own market-sourced numbers to replace it for this "
+            "metro; every score on this page (and the sub-metro rings "
+            "further down) recomputes from your override, re-ranked "
+            "against the other 149 metros' baseline estimates so "
+            "comparisons stay apples-to-apples."
+        )
+        oc1, oc2 = st.columns(2)
+        land_override = oc1.number_input(
+            "Land cost per acre ($)", min_value=10_000, max_value=10_000_000,
+            value=int(row["land_cost_per_acre_usd"]), step=10_000,
+            key=f"land_override_{metro_choice}",
+        )
+        hard_override = oc2.number_input(
+            "Construction cost per SF ($)", min_value=20, max_value=1_000,
+            value=int(row["construction_cost_per_sf_usd"]), step=5,
+            key=f"hard_override_{metro_choice}",
+        )
+
+    overridden = (
+        land_override != int(row["land_cost_per_acre_usd"])
+        or hard_override != int(row["construction_cost_per_sf_usd"])
+    )
+    if overridden:
+        overridden_raw = raw.copy()
+        mask = overridden_raw["metro"] == metro_choice
+        overridden_raw.loc[mask, "land_cost_per_acre_usd"] = land_override
+        overridden_raw.loc[mask, "construction_cost_per_sf_usd"] = hard_override
+        scored_overridden = score_metros(
+            overridden_raw,
+            shortage_weights=shortage_weights,
+            feasibility_weights=feasibility_weights,
+            ami_tier_pct=ami_tier_pct,
+            density_tier=density_tier,
+            unit_size_sf=unit_size_sf,
+            soft_cost_pct=soft_cost_pct,
+            alpha=alpha,
+        )
+        row = scored_overridden[scored_overridden["metro"] == metro_choice].iloc[0]
+        st.info(
+            f"Showing scores recomputed with your overrides -- rank #{int(row['rank'])} "
+            "here reflects a re-ranking against the other metros' baseline estimates, "
+            "and may differ slightly from the Ranked Table tab (which always uses the "
+            "baseline, not your override).",
+            icon="✏️",
+        )
+
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
     c1.metric("Opportunity Score", f"{row['opportunity_score']:.1f}", f"Rank #{int(row['rank'])}")
     c2.metric("Shortage Score", f"{row['shortage_score']:.1f}")
     c3.metric("Feasibility Score", f"{row['feasibility_score']:.1f}")
+    with c4:
+        st.markdown("&nbsp;")  # vertical spacer to align the button with the metrics
+        already_added = metro_choice in st.session_state.comparison_metros
+        if st.button(
+            "✅ Added" if already_added else "➕ Add to Comparison",
+            disabled=already_added,
+            key=f"add_compare_{metro_choice}",
+            use_container_width=True,
+        ):
+            st.session_state.comparison_metros.append(metro_choice)
+            st.rerun()
 
     col_a, col_b = st.columns(2)
 
@@ -427,6 +549,54 @@ with tab_breakdown:
         )
         st.plotly_chart(fig_ring, use_container_width=True)
 
+    with st.expander("How these ring radii were chosen", expanded=False):
+        st.markdown(
+            """
+The four rings use **fixed radii -- 8 / 20 / 40 / 70 miles -- applied the
+same way to every metro.** They are not measured per metro from commute
+survey data, traffic patterns, or each metro's actual CBSA boundary; they're
+a planning-literature-informed heuristic for a typical mid-to-large U.S.
+metro, used as a consistent yardstick so every metro is comparable:
+
+- **Urban Core (0-8 mi):** roughly the walkable/dense downtown and
+  immediately adjacent neighborhoods of the principal city.
+- **Inner Suburbs (8-20 mi):** roughly a 15-30 minute drive commute shed in
+  most metros.
+- **Outer Suburbs (20-40 mi):** extends to roughly the edge of a typical
+  metro's continuously built-up suburban area.
+- **Exurban / Micropolitan Fringe (40-70 mi):** commuter-shed overflow and
+  satellite towns beyond that, out to where it stops being a plausible
+  same-metro commute for most people.
+
+These bands fit sprawling Sunbelt metros better than compact Northeast
+metros hemmed in by geography or water -- that's an accepted tradeoff for
+having one consistent, comparable measure across all 150 metros rather
+than a custom-fit boundary for each one.
+"""
+        )
+
+    st.markdown("**Counties within each ring**")
+    county_bounds = ring_bounds_miles()
+    county_lists = counties_by_ring(row["lat"], row["lon"], county_bounds)
+    st.caption(
+        "Real Census county names, bucketed by great-circle distance from "
+        "this metro's center point to each county's approximate center "
+        "(bounding-box midpoint, not a precise area centroid) -- not "
+        "fabricated place names. A ring can legitimately come up empty: "
+        "counties are large administrative units, so a tight ring like "
+        "Urban Core (0-8 mi) often has no county center that close, even "
+        "though the metro's downtown is in a county that extends into it."
+    )
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    for col, tier in zip((cc1, cc2, cc3, cc4), SUBAREA_TIERS):
+        lo, hi = county_bounds[tier]
+        counties = county_lists.get(tier, [])
+        col.markdown(f"**{tier}**  \n*{lo:.0f}-{hi:.0f} mi*")
+        if counties:
+            col.markdown("\n".join(f"- {c}" for c in counties))
+        else:
+            col.caption("No county center falls in this band.")
+
     st.markdown(f"**Where within {metro_choice}**")
     st.caption(
         "Schematic view only -- rings are stylized concentric bands around "
@@ -492,15 +662,115 @@ with tab_breakdown:
     )
     st.plotly_chart(fig_geo, use_container_width=True)
 
+# --------------------------------------------------------- metro comparison --
+with tab_compare:
+    st.subheader("Metro Comparison")
+    st.caption(
+        "Side-by-side comparison of metros added from the Metro Breakdown "
+        "tab's \"➕ Add to Comparison\" button -- for weighing a shortlist "
+        "of sites against each other directly, instead of flipping between "
+        "single-metro breakdowns."
+    )
+
+    selected = st.session_state.comparison_metros
+    if not selected:
+        st.info(
+            "No metros added yet. Go to the Metro Breakdown tab, pick a "
+            "metro, and click \"➕ Add to Comparison\" to start building a "
+            "shortlist.",
+            icon="📋",
+        )
+    else:
+        remove_cols = st.columns(len(selected) + 1)
+        for i, m in enumerate(selected):
+            if remove_cols[i].button(f"✕ {m}", key=f"remove_compare_{m}", help=f"Remove {m} from comparison"):
+                st.session_state.comparison_metros = [x for x in selected if x != m]
+                st.rerun()
+        if remove_cols[-1].button("Clear all"):
+            st.session_state.comparison_metros = []
+            st.rerun()
+
+        compare_df = scored[scored["metro"].isin(selected)].set_index("metro").loc[selected]
+
+        fig_cmp = go.Figure()
+        for score_col, label, color in [
+            ("opportunity_score", "Opportunity", "#1f77b4"),
+            ("shortage_score", "Shortage", "#d62728"),
+            ("feasibility_score", "Feasibility", "#2ca02c"),
+        ]:
+            fig_cmp.add_trace(go.Bar(x=selected, y=compare_df[score_col], name=label, marker_color=color))
+        fig_cmp.update_layout(
+            barmode="group", height=360, yaxis_title="Score (0-100)",
+            margin=dict(l=0, r=0, t=10, b=0),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        )
+        st.plotly_chart(fig_cmp, use_container_width=True)
+
+        compare_metrics = {
+            "rank": "National Rank",
+            "opportunity_score": "Opportunity Score",
+            "shortage_score": "Shortage Score",
+            "feasibility_score": "Feasibility Score",
+            "price_to_income": "Price-to-Income",
+            "median_home_price_usd": "Median Home Price",
+            "median_household_income_usd": "Median Household Income",
+            "feasibility_gap_usd": "Feasibility Gap ($/unit)",
+            "land_cost_per_unit_usd": "Land Cost/Unit",
+            "development_cost_per_unit_usd": "Dev Cost/Unit",
+            "permit_velocity_index": "Permit Friction Index",
+            "cap_rate_pct": "Cap Rate (%)",
+        }
+        fmt_rows = {
+            "National Rank": lambda v: f"#{int(v)}",
+            "Opportunity Score": lambda v: f"{v:.1f}",
+            "Shortage Score": lambda v: f"{v:.1f}",
+            "Feasibility Score": lambda v: f"{v:.1f}",
+            "Price-to-Income": lambda v: f"{v:.2f}×",
+            "Median Home Price": lambda v: f"${v:,.0f}",
+            "Median Household Income": lambda v: f"${v:,.0f}",
+            "Feasibility Gap ($/unit)": lambda v: f"${v:,.0f}",
+            "Land Cost/Unit": lambda v: f"${v:,.0f}",
+            "Dev Cost/Unit": lambda v: f"${v:,.0f}",
+            "Permit Friction Index": lambda v: f"{v:.0f}",
+            "Cap Rate (%)": lambda v: f"{v:.2f}%",
+        }
+        display = compare_df[list(compare_metrics.keys())].rename(columns=compare_metrics).T
+        display_fmt = display.apply(lambda r: r.map(fmt_rows[r.name]), axis=1)
+        st.dataframe(display_fmt, use_container_width=True, height=36 * (len(display_fmt) + 1))
+
+        st.download_button(
+            "Download comparison (CSV)",
+            data=compare_df.reset_index().to_csv(index=False).encode(),
+            file_name="metro_comparison.csv",
+            mime="text/csv",
+        )
+
 # ------------------------------------------------------------- buy-down calc --
 with tab_buydown:
-    st.subheader("2-1 Temporary Buy-Down Calculator")
-    st.caption("Illustrative only -- not a loan offer or financial advice.")
+    st.subheader("Buy-Down Calculator")
+    st.caption("Illustrative only -- not a loan offer, rate quote, or financial advice.")
 
     buydown_metro = st.selectbox(
         "Example scenario for a site in", options=scored["metro"].tolist(), key="buydown_metro",
     )
     metro_ctx = scored[scored["metro"] == buydown_metro].iloc[0]
+
+    FINANCING_OPTIONS = (
+        ["Standard Fixed"] + list(TEMPORARY_BUYDOWN_STRUCTURES.keys()) + ["Permanent Buydown (Discount Points)"]
+    )
+    # Illustrative benchmark rates by loan type -- NOT a live feed from
+    # Mortgage News Daily or anywhere else (this app has no way to fetch a
+    # live rate; see README). Pick "Custom" and check
+    # mortgagenewsdaily.com for today's actual rate if these look stale.
+    RATE_PRESETS: dict[str, float | None] = {
+        "Custom (enter below)": None,
+        "30-Year Fixed": 6.50,
+        "15-Year Fixed": 5.75,
+        "FHA 30-Year Fixed": 6.25,
+        "VA 30-Year Fixed": 6.10,
+        "Jumbo 30-Year Fixed": 6.65,
+        "5/1 ARM (initial rate)": 5.90,
+    }
 
     input_col, summary_col = st.columns(2)
 
@@ -517,84 +787,163 @@ with tab_buydown:
             down_usd = home_price * down_pct / 100
             st.caption(f"{down_pct}% · \\${down_usd:,.0f}")
             term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
-            note_rate = st.number_input("Note rate (%)", min_value=0.0, max_value=15.0, value=6.5, step=0.125)
-            financing_type = st.radio(
-                "Financing type", ["Standard Fixed", "2-1 Buydown"], index=1, horizontal=True,
+
+            rate_preset = st.selectbox(
+                "Rate preset (illustrative benchmark)", options=list(RATE_PRESETS.keys()),
+                help=(
+                    "Illustrative typical rates by loan type -- not a live feed. Check "
+                    "current rates at mortgagenewsdaily.com and use \"Custom\" to enter "
+                    "your own number below if these look stale."
+                ),
             )
+            preset_value = RATE_PRESETS[rate_preset]
+            note_rate = st.number_input(
+                "Note rate (%)", min_value=0.0, max_value=15.0,
+                value=preset_value if preset_value is not None else 6.5, step=0.125,
+                key=f"note_rate_{rate_preset}",
+            )
+            if preset_value is not None:
+                st.caption(
+                    "Illustrative benchmark, not a live rate feed -- see "
+                    "[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
+                    "for today's actual rates."
+                )
+
+            financing_type = st.radio("Financing type", FINANCING_OPTIONS, index=2)
+            points = 2.0
+            if financing_type == "Permanent Buydown (Discount Points)":
+                points = st.slider(
+                    "Discount points purchased", min_value=0.0, max_value=5.0, value=2.0, step=0.25,
+                    help="1 point = 1% of the loan amount, paid upfront, for a permanent rate reduction.",
+                )
 
     principal = home_price - down_usd
-    result = two_one_buydown(principal, note_rate, term_years)
-    standard_payment = result.note_payment
+    standard_payment = monthly_payment(principal, note_rate, term_years)
+
+    tb_result = None
+    pb_result = None
+    if financing_type in TEMPORARY_BUYDOWN_STRUCTURES:
+        effective_steps = TEMPORARY_BUYDOWN_STRUCTURES[financing_type][:term_years]
+        tb_result = temporary_buydown(principal, note_rate, term_years, effective_steps)
+    elif financing_type == "Permanent Buydown (Discount Points)":
+        pb_result = permanent_buydown(principal, note_rate, term_years, points=points)
 
     with summary_col:
         with st.container(border=True):
             st.markdown("**PAYMENT SUMMARY**")
-            periods = [("Year 1", result.year1_rate_pct, result.year1_payment)]
-            if term_years >= 2:
-                periods.append(("Year 2", result.year2_rate_pct, result.year2_payment))
-            if term_years >= 3:
-                label = "Year 3" if term_years == 3 else f"Year 3-{term_years}"
-                periods.append((label, result.note_rate_pct, result.note_payment))
 
-            if financing_type == "2-1 Buydown":
-                summary_table = pd.DataFrame(
+            if tb_result is not None:
+                periods = [(y.label, y.rate_pct, y.payment) for y in tb_result.schedule]
+                n_discounted = len(tb_result.schedule)
+                if term_years > n_discounted:
+                    start = n_discounted + 1
+                    label = f"Year {start}" if term_years == start else f"Year {start}-{term_years}"
+                    periods.append((label, tb_result.note_rate_pct, tb_result.note_payment))
+                st.table(pd.DataFrame(
                     [{"Year": p, "Rate": f"{r:.2f}%", "Monthly Payment": f"${m:,.0f}"} for p, r, m in periods]
-                )
-                st.table(summary_table)
+                ))
 
-                savings_parts = [f"about \\${result.year1_monthly_savings:,.0f}/mo in Year 1"]
-                total_savings = result.year1_monthly_savings * 12
-                if term_years >= 2:
-                    savings_parts.append(f"\\${result.year2_monthly_savings:,.0f}/mo in Year 2")
-                    total_savings += result.year2_monthly_savings * 12
-                savings_sentence = "Buyer saves " + " and ".join(savings_parts)
-                if term_years >= 3:
-                    savings_sentence += f" -- roughly \\${total_savings:,.0f} total before the rate resets."
+                savings_bits = [f"\\${y.monthly_savings_vs_note:,.0f}/mo in {y.label}" for y in tb_result.schedule]
+                if len(savings_bits) > 1:
+                    savings_sentence = "Buyer saves " + ", ".join(savings_bits[:-1]) + f", and {savings_bits[-1]}"
                 else:
-                    savings_sentence += f" -- roughly \\${total_savings:,.0f} total over the life of this {term_years}-year loan."
+                    savings_sentence = "Buyer saves " + savings_bits[0]
+                savings_sentence += f" -- roughly \\${tb_result.total_subsidy:,.0f} total"
+                savings_sentence += (
+                    " before the rate resets." if term_years > n_discounted
+                    else f" over the life of this {term_years}-year loan."
+                )
                 st.success(savings_sentence, icon="✅")
-            else:
+
+            elif pb_result is not None:
+                st.table(pd.DataFrame([
+                    {"Item": "Note rate (no buydown)", "Rate": f"{pb_result.note_rate_pct:.2f}%", "Monthly Payment": f"${pb_result.note_payment:,.0f}"},
+                    {"Item": f"Effective rate ({points:g} pts bought)", "Rate": f"{pb_result.effective_rate_pct:.2f}%", "Monthly Payment": f"${pb_result.effective_payment:,.0f}"},
+                ]))
+                pb_c1, pb_c2 = st.columns(2)
+                pb_c1.metric("Monthly savings", f"${pb_result.monthly_savings:,.0f}")
+                pb_c2.metric("Upfront points cost", f"${pb_result.points_cost:,.0f}")
+                if pb_result.breakeven_months:
+                    st.success(
+                        f"Breakeven: ~{pb_result.breakeven_months:.0f} months "
+                        f"(~{pb_result.breakeven_months / 12:.1f} years) of staying in the "
+                        "loan to recoup the points cost via monthly savings, for the rest "
+                        "of the loan after that.",
+                        icon="✅",
+                    )
+                else:
+                    st.warning(
+                        "No monthly savings at this rate-reduction assumption -- the points "
+                        "cost would never break even.",
+                        icon="⚠️",
+                    )
+
+            else:  # Standard Fixed
                 st.table(pd.DataFrame([{"Year": f"1-{term_years}", "Rate": f"{note_rate:.2f}%", "Monthly Payment": f"${standard_payment:,.0f}"}]))
                 st.info(
                     f"Standard fixed loan -- \\${standard_payment:,.0f}/mo for all {term_years} years, "
-                    "no temporary rate reduction. Switch to \"2-1 Buydown\" above to see payment relief.",
+                    "no rate reduction. Pick a buydown type above to see payment relief.",
                     icon="ℹ️",
                 )
             st.caption(f"Financed amount: \\${principal:,.0f} ({100 - down_pct}% of \\${home_price:,.0f})")
 
     with st.container(border=True):
         st.markdown("**MONTHLY PAYMENT OVER TIME**")
-        chart_years = min(5, term_years)
         st.caption(f"{term_years}-year fixed loan · {down_pct}% down · \\${principal:,.0f} principal")
 
-        x_years = list(range(1, chart_years + 1))
-        y_buydown = [
-            result.year1_payment if y == 1 else result.year2_payment if y == 2 else result.note_payment
-            for y in x_years
-        ]
-        y_standard = [standard_payment] * len(x_years)
-
         fig_pay = go.Figure()
-        fig_pay.add_trace(go.Scatter(
-            x=x_years, y=y_buydown, name="2-1 Buydown", mode="lines+markers",
-            line=dict(color="#c1873b", width=3), marker=dict(size=8),
-        ))
-        fig_pay.add_trace(go.Scatter(
-            x=x_years, y=y_standard, name="Standard Fixed", mode="lines",
-            line=dict(color="#555555", width=2, dash="dash"),
-        ))
-        if term_years >= 3:
-            fig_pay.add_vline(x=2.5, line_width=1, line_dash="dot", line_color="gray")
-            fig_pay.add_annotation(x=2.5, y=max(y_buydown + y_standard), text="Rate resets", showarrow=False, yshift=12, font=dict(size=10, color="gray"))
+        if tb_result is not None:
+            chart_years = min(5, term_years)
+            x_years = list(range(1, chart_years + 1))
+            n_discounted = len(tb_result.schedule)
+            y_buydown = [
+                tb_result.schedule[y - 1].payment if y <= n_discounted else tb_result.note_payment
+                for y in x_years
+            ]
+            y_standard = [standard_payment] * len(x_years)
+            fig_pay.add_trace(go.Scatter(
+                x=x_years, y=y_buydown, name=financing_type, mode="lines+markers",
+                line=dict(color="#c1873b", width=3), marker=dict(size=8),
+            ))
+            fig_pay.add_trace(go.Scatter(
+                x=x_years, y=y_standard, name="Standard Fixed", mode="lines",
+                line=dict(color="#555555", width=2, dash="dash"),
+            ))
+            if term_years > n_discounted:
+                reset_x = n_discounted + 0.5
+                fig_pay.add_vline(x=reset_x, line_width=1, line_dash="dot", line_color="gray")
+                fig_pay.add_annotation(x=reset_x, y=max(y_buydown + y_standard), text="Rate resets", showarrow=False, yshift=12, font=dict(size=10, color="gray"))
+                st.caption(f"Rate and payment return to the note rate in Year {n_discounted + 1} and hold there for the rest of the loan.")
+            fig_pay.update_layout(xaxis=dict(title="Year", tickmode="array", tickvals=x_years))
+
+        elif pb_result is not None:
+            x_years = list(range(1, min(10, term_years) + 1))
+            fig_pay.add_trace(go.Scatter(
+                x=x_years, y=[pb_result.effective_payment] * len(x_years),
+                name=f"Permanent Buydown ({points:g} pts)", mode="lines+markers",
+                line=dict(color="#c1873b", width=3), marker=dict(size=6),
+            ))
+            fig_pay.add_trace(go.Scatter(
+                x=x_years, y=[standard_payment] * len(x_years), name="Standard Fixed", mode="lines",
+                line=dict(color="#555555", width=2, dash="dash"),
+            ))
+            fig_pay.update_layout(xaxis=dict(title="Year", tickmode="array", tickvals=x_years))
+            st.caption("The permanent rate reduction holds for the full loan term -- no reset.")
+
+        else:  # Standard Fixed
+            x_years = list(range(1, min(5, term_years) + 1))
+            fig_pay.add_trace(go.Scatter(
+                x=x_years, y=[standard_payment] * len(x_years), name="Standard Fixed", mode="lines+markers",
+                line=dict(color="#555555", width=3), marker=dict(size=8),
+            ))
+            fig_pay.update_layout(xaxis=dict(title="Year", tickmode="array", tickvals=x_years))
+
         fig_pay.update_layout(
             height=340, margin=dict(l=0, r=0, t=10, b=0),
-            xaxis=dict(title="Year", tickmode="array", tickvals=x_years),
             yaxis_title="Monthly payment ($)",
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         )
         st.plotly_chart(fig_pay, use_container_width=True)
-        if term_years >= 3:
-            st.caption("Rate and payment return to the note rate in Year 3 and hold there for the rest of the loan.")
 
     stat1, stat2, stat3 = st.columns(3)
     stat1.metric("Median Home Price", f"${metro_ctx['median_home_price_usd']:,.0f}")
@@ -608,11 +957,24 @@ with tab_sources:
         """
 Per the project charter, most inputs come from **public APIs and bulk data
 files**: Census / ACS, Census Building Permits Survey, FRED, FHFA HPI, and
-Zillow Research (ZHVI/ZORI). CoStar/RCA are explicitly **not** used. Any
-cost, land, or cap-rate data not available from public sources is flagged
-as a **synthetic estimate**.
+Zillow Research (ZHVI/ZORI). CoStar/RCA are explicitly **not** used. Every
+field below carries one of three provenance labels -- these are not the
+same thing, and conflating them would misrepresent the data:
 """
     )
+    c1, c2, c3 = st.columns(3)
+    c1.success("**live**\n\nFetched from the source API this session.", icon="🟢")
+    c2.info(
+        "**published**\n\nA real, publicly-published statistic (Census ACS) -- "
+        "just not fetched live this run. Not modeled or guessed.",
+        icon="🔵",
+    )
+    c3.warning(
+        "**synthetic**\n\nA modeled estimate. No free, metro-level public "
+        "source exists for this field at all.",
+        icon="🟠",
+    )
+
     source_cols = [c for c in scored.columns if c.endswith("__source")]
     if source_cols:
         prov = pd.DataFrame(
@@ -627,12 +989,24 @@ as a **synthetic estimate**.
         """
 **Always-synthetic fields** (no free, metro-level public source exists):
 land cost/acre, construction $/SF, cap rate, operating expenses/unit,
-vacancy/collection loss %, units/acre (zoning policy input), and permit
-velocity / regulatory-friction index.
+vacancy/collection loss %, units/acre (zoning policy input), permit
+velocity / regulatory-friction index, and AMI (derived from the published
+household-income anchor with modeled noise, since metro-level HUD AMI
+figures aren't hand-compiled here).
 
-**Live-eligible fields** (pulled from Census/ACS/Zillow when the pipeline
-runs with network access; synthetic fallback otherwise): population growth,
-permits per 1,000 units, rental & homeowner vacancy, median home price,
-median household income, 3-year rent growth, 3-year income growth.
+**Published fields** (real Census ACS-grounded figures, not modeled; see
+`pipeline/anchors.py`): median home price and median household income --
+and therefore the Price-to-Income Ratio computed from them. These are
+live-eligible (the pipeline will overwrite them with a fresh live pull
+when run with network access) but are **not synthetic** even before that
+happens -- they're real published numbers from general knowledge of ACS
+statistics (vintage noted in the data vintage caption above), just not
+re-verified against the live API this session. Treat them as directionally
+accurate, not penny-precise, until a live refresh runs.
+
+**Other live-eligible fields** (synthetic/modeled fallback until a live
+refresh runs, since no reliable per-metro published anchor was compiled
+for these): population growth, permits per 1,000 units, rental & homeowner
+vacancy, 3-year rent growth, 3-year income growth.
 """
     )
