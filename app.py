@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import os
+from datetime import datetime, timezone
 
 import pandas as pd
 import plotly.colors as pcolors
@@ -40,6 +41,8 @@ from finance import (
     permanent_buydown,
     TEMPORARY_BUYDOWN_STRUCTURES,
 )
+from pipeline.fetch_mortgage_rates import fetch_live_rates, FALLBACK_RATES
+from report import build_pdf_report
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
@@ -68,6 +71,25 @@ def load_data() -> pd.DataFrame:
     df["cbsa"] = df["cbsa"].astype(str).str.zfill(5)
     ref["cbsa"] = ref["cbsa"].astype(str).str.zfill(5)
     return df.merge(ref, on="cbsa", how="left")
+
+
+@st.cache_data(ttl=86_400, show_spinner=False)
+def get_rate_presets(_cache_date: str) -> tuple[dict[str, float], str, str | None]:
+    """Today's benchmark note rates by loan type, refreshed once a day.
+
+    Attempts a live pull from mortgagenewsdaily.com; `_cache_date` (today's
+    date, passed by the caller) is unused in the body but makes it part of
+    Streamlit's cache key, so this re-runs at most once per calendar day
+    per the TTL rather than once per server process lifetime -- the "every
+    day" refresh the rate presets are meant to have. Falls back to static
+    illustrative benchmarks if the live pull fails (always true in this
+    dev sandbox's restricted-egress environment; see pipeline/fetch_mortgage_rates.py).
+    Returns (rates, "live" | "fallback", fetched_at_iso | None).
+    """
+    live = fetch_live_rates()
+    if live is not None:
+        return live, "live", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return FALLBACK_RATES, "fallback", None
 
 
 def normalized_weights(raw: dict[str, float]) -> dict[str, float]:
@@ -738,6 +760,33 @@ with tab_compare:
         display_fmt = display.apply(lambda r: r.map(fmt_rows[r.name]), axis=1)
         st.dataframe(display_fmt, use_container_width=True, height=36 * (len(display_fmt) + 1))
 
+        st.markdown("---")
+        st.markdown("**Save your findings**")
+        st.caption(
+            "Generates a formal PDF report covering every metro above -- scores, shortage "
+            "components, feasibility cost breakdown, and key market data per metro -- plus "
+            "the model settings and data provenance in effect right now, for sharing or "
+            "attaching to an underwriting package."
+        )
+        pdf_bytes = build_pdf_report(
+            compare_df=compare_df,
+            selected=selected,
+            model_controls={
+                "alpha": alpha,
+                "ami_tier_pct": ami_tier_pct,
+                "density_tier": density_tier,
+                "unit_size_sf": unit_size_sf,
+                "soft_cost_pct": soft_cost_pct,
+            },
+            data_vintage=str(data_vintage),
+        )
+        st.download_button(
+            "\U0001F4C4 Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"opportunity-report-{datetime.now(timezone.utc).strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+        )
+
         st.download_button(
             "Download comparison (CSV)",
             data=compare_df.reset_index().to_csv(index=False).encode(),
@@ -758,19 +807,12 @@ with tab_buydown:
     FINANCING_OPTIONS = (
         ["Standard Fixed"] + list(TEMPORARY_BUYDOWN_STRUCTURES.keys()) + ["Permanent Buydown (Discount Points)"]
     )
-    # Illustrative benchmark rates by loan type -- NOT a live feed from
-    # Mortgage News Daily or anywhere else (this app has no way to fetch a
-    # live rate; see README). Pick "Custom" and check
-    # mortgagenewsdaily.com for today's actual rate if these look stale.
-    RATE_PRESETS: dict[str, float | None] = {
-        "Custom (enter below)": None,
-        "30-Year Fixed": 6.50,
-        "15-Year Fixed": 5.75,
-        "FHA 30-Year Fixed": 6.25,
-        "VA 30-Year Fixed": 6.10,
-        "Jumbo 30-Year Fixed": 6.65,
-        "5/1 ARM (initial rate)": 5.90,
-    }
+    # Rate presets refresh once a day: a live pull from mortgagenewsdaily.com
+    # when reachable, illustrative fallback benchmarks otherwise (always the
+    # fallback path in this dev sandbox -- see pipeline/fetch_mortgage_rates.py).
+    _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    live_rates, rate_source, rate_fetched_at = get_rate_presets(_today)
+    RATE_PRESETS: dict[str, float | None] = {"Custom (enter below)": None, **live_rates}
 
     input_col, summary_col = st.columns(2)
 
@@ -788,12 +830,19 @@ with tab_buydown:
             st.caption(f"{down_pct}% · \\${down_usd:,.0f}")
             term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
 
+            rate_preset_label = (
+                "Rate preset (live from mortgagenewsdaily.com)" if rate_source == "live"
+                else "Rate preset (illustrative benchmark)"
+            )
             rate_preset = st.selectbox(
-                "Rate preset (illustrative benchmark)", options=list(RATE_PRESETS.keys()),
+                rate_preset_label, options=list(RATE_PRESETS.keys()),
                 help=(
-                    "Illustrative typical rates by loan type -- not a live feed. Check "
-                    "current rates at mortgagenewsdaily.com and use \"Custom\" to enter "
-                    "your own number below if these look stale."
+                    f"Refreshed daily from mortgagenewsdaily.com (last fetched {rate_fetched_at})."
+                    if rate_source == "live" else
+                    "Live fetch from mortgagenewsdaily.com is unavailable right now, so these are "
+                    "illustrative typical rates by loan type instead. The app retries the live "
+                    "fetch daily. Check current rates at mortgagenewsdaily.com directly and use "
+                    "\"Custom\" to enter your own number below if these look stale."
                 ),
             )
             preset_value = RATE_PRESETS[rate_preset]
@@ -803,11 +852,17 @@ with tab_buydown:
                 key=f"note_rate_{rate_preset}",
             )
             if preset_value is not None:
-                st.caption(
-                    "Illustrative benchmark, not a live rate feed -- see "
-                    "[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
-                    "for today's actual rates."
-                )
+                if rate_source == "live":
+                    st.caption(
+                        f"🟢 Live rate from [mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
+                        f"-- fetched {rate_fetched_at}, refreshes daily."
+                    )
+                else:
+                    st.caption(
+                        "🟠 Illustrative benchmark, not a live rate feed right now -- see "
+                        "[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
+                        "for today's actual rates. The app retries the live fetch daily."
+                    )
 
             financing_type = st.radio("Financing type", FINANCING_OPTIONS, index=2)
             points = 2.0

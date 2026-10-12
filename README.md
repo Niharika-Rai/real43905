@@ -32,15 +32,19 @@ Live app: deploy to [Render](https://render.com) using `render.yaml` (see
   ring radii were chosen.
 - **Metro Comparison** — a shortlist of metros added from the Metro
   Breakdown tab, shown side-by-side: a grouped bar chart and a full
-  transposed comparison table, downloadable as CSV.
+  transposed comparison table, downloadable as CSV, plus a **"Download PDF
+  Report"** button that generates a formal, multi-page PDF covering every
+  metro in the shortlist.
 - **Buy-Down Calculator** — a metro-linked calculator supporting Standard
   Fixed, four temporary buy-down structures (3-2-1, 2-1, 1-1, 1-0), and a
   Permanent Buydown (discount points): Loan Inputs / Payment Summary cards,
-  a note-rate dropdown of illustrative benchmark rates by loan type (with a
-  direct link to mortgagenewsdaily.com for live rates, plus full manual
-  override), a savings callout, a monthly-payment-over-time comparison
-  chart, and metro-context stat tiles. Illustrative only, not a loan
-  product.
+  a note-rate dropdown that refreshes **daily** with current benchmark
+  rates by loan type (live-eligible, same provenance model as the rest of
+  the app -- falls back to illustrative benchmarks with a direct link to
+  mortgagenewsdaily.com when a live pull isn't available, plus full manual
+  override either way), a savings callout, a monthly-payment-over-time
+  comparison chart, and metro-context stat tiles. Illustrative only, not a
+  loan product.
 - **Data Sources** — a transparency table showing, for every field in the
   current view, whether it is `live`, `published`, or `synthetic`.
 
@@ -168,6 +172,19 @@ chart of Opportunity/Shortage/Feasibility scores, and a full transposed
 table of every underlying metric, downloadable as CSV. Metros can be removed
 individually or cleared all at once.
 
+**Download PDF Report.** Below the comparison table, "📄 Download PDF
+Report" (built with `report.py`, using reportlab) generates a formal,
+multi-page PDF covering the whole shortlist in one file: a cover page
+listing the metros and the exact Model Controls settings (α/β weighting,
+AMI tier, density tier, unit size, soft-cost %) in effect when it was
+generated, an executive-summary comparison table, one detail page per
+metro (shortage z-score components, the full feasibility cost breakdown,
+and key market data), and a closing page with the live/published/synthetic
+data-provenance explanation and the standard disclaimer. It's meant as a
+save-your-findings artifact for a shortlist built during a session --
+something to attach to an underwriting package or share with a colleague
+without re-deriving the numbers by hand.
+
 ## Buy-Down Calculator: financing types
 
 The calculator supports six financing types, selectable under "Financing
@@ -188,18 +205,38 @@ structure's own length (e.g. a 3-2-1 buydown on a 2-year term only shows
 years 1-2). All six types are implemented in `finance.py` and covered by
 unit tests in `tests/test_scoring.py`.
 
-### Note rate: illustrative benchmark presets
+### Note rate: daily-refreshing rate presets
 
-The "Rate preset (illustrative benchmark)" dropdown offers typical current
-rates by loan type (30-Year Fixed, 15-Year Fixed, FHA, VA, Jumbo, 5/1 ARM) so
-the calculator looks grounded in real market pricing rather than an
-arbitrary default. **These are illustrative benchmark numbers, not a live
-feed** — this app has no way to fetch a real-time rate from Mortgage News
-Daily or anywhere else from this sandbox (see **Network access** below).
-Selecting a preset fills in the Note Rate field, which remains fully
-editable; a "Custom" option and a direct link to
-[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) are provided so
-users can look up today's actual rate and enter it themselves.
+The rate-preset dropdown offers today's rates by loan type (30-Year Fixed,
+15-Year Fixed, FHA, VA, Jumbo, 5/1 ARM). It follows the same live/fallback
+pattern as the rest of the app's data (see **Data sources & what's
+synthetic** below), not a static hardcoded list:
+
+- `pipeline/fetch_mortgage_rates.py` attempts a live scrape of
+  [mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/)'s public
+  rates page for all six loan types. It only returns a result when **all
+  six** rates are found with plausible values (0.5-20%) -- a partial or
+  ambiguous parse returns nothing rather than risk showing a mismatched
+  rate for the wrong loan type.
+- `app.py` wraps that call in `st.cache_data(ttl=86_400)`, keyed on
+  today's date -- so it refreshes **once a day**, not on every page
+  interaction, and automatically re-attempts the live pull again the next
+  calendar day.
+- When the live pull fails -- which is every run in this project's dev
+  sandbox, since mortgagenewsdaily.com is outside the restricted-egress
+  allowlist here (confirmed directly; see **Network access** below) -- it
+  falls back to the same static illustrative benchmark rates as before,
+  and the dropdown label and help text switch to say so plainly ("Live
+  fetch from mortgagenewsdaily.com is unavailable right now..."). The
+  fallback values live in `pipeline.fetch_mortgage_rates.FALLBACK_RATES`.
+
+Selecting any preset fills in the Note Rate field, which remains fully
+editable; a "Custom" option and a direct link to mortgagenewsdaily.com are
+always available so users can look up today's actual rate and enter it
+themselves regardless of which path is active. The live-fetch code is real,
+not a stub -- it will start returning live rates the moment it runs
+somewhere with normal internet access (e.g. a deployed Render service),
+the same as the Census/Zillow/FHFA/FRED fetchers.
 
 ## Data sources & what's synthetic
 
@@ -274,6 +311,7 @@ app.py                      Streamlit app (entry point)
 metros.py                   150-metro reference table (CBSA, lat/lon, tier)
 scoring.py                  Shortage / Feasibility / Opportunity score formulas
 finance.py                  Mortgage amortization + temporary/permanent buy-down calculators
+report.py                   PDF report builder for the Metro Comparison shortlist (reportlab)
 pipeline/
   anchors.py                 Real, published home-price/income anchors for all 150 metros
   synthetic.py                Tier-calibrated synthetic data generator + density/AMI tier constants
@@ -282,11 +320,15 @@ pipeline/
   fetch_fhfa.py                Live FHFA HPI pulls
   fetch_zillow.py              Live Zillow ZORI/ZHVI bulk CSV pulls
   fetch_fred.py                 Live FRED series pulls
+  fetch_mortgage_rates.py       Live mortgagenewsdaily.com rate-preset scrape + fallback benchmarks
   subareas.py                  Sub-metro submarket ring generator + ring_bounds_miles()
   geo_shapes.py                 Offline state/county shapefile rendering + counties_by_ring()
   build_dataset.py             Orchestrator: live-first, published/synthetic-fallback, writes data/metro_dataset.csv
 data/metro_dataset.csv        Bundled dataset (150 metros) shipped with the app
-tests/test_scoring.py         Unit tests for scoring math, finance calculators, and geo helpers
+tests/
+  test_scoring.py               Unit tests for scoring math, finance calculators, and geo helpers
+  test_fetch_mortgage_rates.py  Unit tests for the rate-preset scraper's parsing and fallback behavior
+  test_report.py                Unit tests for PDF report generation
 render.yaml                  Render Blueprint (web service + optional weekly refresh cron job)
 requirements.txt
 ```
@@ -375,33 +417,39 @@ agnostic — it just needs to run somewhere with network access and write to
 
 This development sandbox's outbound network access is restricted to a small
 allowlist (PyPI, npm, GitHub, etc.). Census, Zillow, FHFA, FRED, and Mortgage
-News Daily are all unreachable from inside it (confirmed directly). That is
-why:
+News Daily are all unreachable from inside it (confirmed directly, including
+via a dedicated web-fetch tool, not just raw sockets). That is why:
 
 - `data/metro_dataset.csv` ships with published anchors but otherwise
   synthetic live-eligible fields (see **Data sources & what's synthetic**),
   and
-- the Buy-Down Calculator's rate dropdown offers illustrative benchmark
-  presets with a link to check live rates yourself, instead of pulling a
-  live feed.
+- the Buy-Down Calculator's rate dropdown falls back to illustrative
+  benchmark presets with a link to check live rates yourself, instead of
+  showing a live mortgagenewsdaily.com pull (see **Note rate:
+  daily-refreshing rate presets** above).
 
 None of this is a limitation of the live-fetch code itself, which is fully
-implemented in `pipeline/fetch_*.py` — it will populate real, live data the
-moment `ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset` runs somewhere
-with normal internet access.
+implemented in `pipeline/fetch_*.py` (including
+`pipeline/fetch_mortgage_rates.py`) — it will populate real, live data the
+moment it runs somewhere with normal internet access: the dataset fetchers
+via `ENABLE_LIVE_FETCH=1 python -m pipeline.build_dataset`, and the rate
+scraper automatically, the first time the app is loaded (and once a day
+after that) on a deployment that can reach mortgagenewsdaily.com.
 
 ## MVP scope (per charter)
 
 **In:** 150 U.S. metros; Shortage, Feasibility, Opportunity scores; ranked
 table (with tooltips) and map; per-metro score breakdown with editable cost
-overrides and real county-ring detail; Metro Comparison; α/β and AMI-tier
-configuration sliders; buy-down calculator with multiple financing
-structures and illustrative rate presets; scheduled batch data refresh.
+overrides and real county-ring detail; Metro Comparison with a downloadable
+PDF report; α/β and AMI-tier configuration sliders; buy-down calculator with
+multiple financing structures and daily-refreshing rate presets (live when
+reachable, illustrative fallback otherwise); scheduled batch data refresh.
 
 **Deferred:** parcel-level siting (below the county-ring level); licensed
-CoStar/RCA integration; live (real-time) rate feed from Mortgage News Daily
-or any other source; full underwriting outputs (IRR, debt sizing); actual
-loan origination workflow; developer user accounts for personalization.
+CoStar/RCA integration; full underwriting outputs (IRR, debt sizing); actual
+loan origination workflow; developer user accounts for personalization;
+saved/persistent Metro Comparison shortlists across sessions (currently
+session-only, exportable as PDF/CSV before the session ends).
 
 ## Disclaimer
 
@@ -411,6 +459,11 @@ not a loan product, rate quote, or offer of credit. Feasibility-side inputs
 (land cost, construction cost, cap rate, operating expenses, vacancy/collection
 loss, and permit velocity) are synthetic estimates, not observed market data
 — always validate with a full local pro forma before making a development
-decision. Buy-down rate presets are illustrative benchmarks, not a live feed
-or a rate quote — check a live source (e.g. mortgagenewsdaily.com) and your
-lender for actual current rates and pricing.
+decision. Buy-down rate presets refresh daily from mortgagenewsdaily.com when
+reachable, but are not a locked rate quote even then, and fall back to
+illustrative benchmarks when a live pull isn't available — check a live
+source (e.g. mortgagenewsdaily.com) and your lender for actual current rates
+and pricing. The downloadable PDF report is a snapshot of the app's output at
+the time it was generated, carrying the same synthetic/published/live
+provenance and disclaimers as the live app -- it is not an appraisal,
+underwriting package, or substitute for professional due diligence.
