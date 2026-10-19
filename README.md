@@ -229,27 +229,36 @@ unit tests in `tests/test_scoring.py`.
 ### Note rate: daily-refreshing rate presets
 
 The rate-preset dropdown offers today's rates by loan type (30-Year Fixed,
-15-Year Fixed, FHA, VA, Jumbo, 5/1 ARM). It follows the same live/fallback
-pattern as the rest of the app's data (see **Data sources & what's
-synthetic** below), not a static hardcoded list:
+15-Year Fixed, Jumbo, 7/6 SOFR ARM, FHA, VA), matching the exact row order
+and label wording of mortgagenewsdaily.com's own "Daily Rate Survey" table.
+It follows the same live/fallback pattern as the rest of the app's data
+(see **Data sources & what's synthetic** below), not a static hardcoded
+list:
 
 - `pipeline/fetch_mortgage_rates.py` attempts a live scrape of
   [mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/)'s public
-  rates page for all six loan types. It only returns a result when **all
-  six** rates are found with plausible values (0.5-20%) -- a partial or
-  ambiguous parse returns nothing rather than risk showing a mismatched
-  rate for the wrong loan type.
-- `app.py` wraps that call in `st.cache_data(ttl=86_400)`, keyed on
-  today's date -- so it refreshes **once a day**, not on every page
-  interaction, and automatically re-attempts the live pull again the next
-  calendar day.
-- When the live pull fails -- which is every run in this project's dev
-  sandbox, since mortgagenewsdaily.com is outside the restricted-egress
-  allowlist here (confirmed directly; see **Network access** below) -- it
-  falls back to the same static illustrative benchmark rates as before,
-  and the dropdown label and help text switch to say so plainly ("Live
-  fetch from mortgagenewsdaily.com is unavailable right now..."). The
-  fallback values live in `pipeline.fetch_mortgage_rates.FALLBACK_RATES`.
+  rates page. Each of the six loan types is matched **independently** --
+  `get_live_rates_partial()` returns whatever subset it could confidently
+  find, rather than requiring all six or returning nothing. (An earlier
+  version of this module required all six to match, which turned out to
+  be a real bug: when MND renamed its adjustable-rate product from "5/1
+  ARM" to "7/6 SOFR ARM," that one unmatched label silently zeroed out
+  the other five rates that were parsing correctly. The alias list now
+  also tries the old "5/1 ARM" phrasing in case MND reverts.)
+- `app.py`'s `get_rate_presets()` wraps that call in
+  `st.cache_data(ttl=86_400)`, keyed on today's date -- so it refreshes
+  **once a day**, not on every page interaction -- and merges the result
+  against `FALLBACK_RATES` **per loan type**: a type the live pull found
+  is shown live, any type it didn't falls back to the static snapshot on
+  its own, each tracked and captioned independently in the UI.
+- When the live pull fails entirely -- which is every run in this
+  project's dev sandbox, since mortgagenewsdaily.com is outside the
+  restricted-egress allowlist here (confirmed directly; see **Network
+  access** below) -- every rate falls back to the manual snapshot in
+  `pipeline.fetch_mortgage_rates.FALLBACK_RATES`, dated
+  `FALLBACK_RATES_AS_OF` (currently 2026-10-16, checked directly against
+  a live screenshot of mortgagenewsdaily.com's table), and the caption
+  says so plainly, including that date.
 
 Selecting any preset fills in the Note Rate field, which remains fully
 editable; a "Custom" option and a direct link to mortgagenewsdaily.com are
