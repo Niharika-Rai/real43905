@@ -41,7 +41,7 @@ from finance import (
     permanent_buydown,
     TEMPORARY_BUYDOWN_STRUCTURES,
 )
-from pipeline.fetch_mortgage_rates import fetch_live_rates, FALLBACK_RATES
+from pipeline.fetch_mortgage_rates import get_live_rates_partial, FALLBACK_RATES, FALLBACK_RATES_AS_OF
 from report import build_pdf_report
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
@@ -74,22 +74,36 @@ def load_data() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=86_400, show_spinner=False)
-def get_rate_presets(_cache_date: str) -> tuple[dict[str, float], str, str | None]:
+def get_rate_presets(_cache_date: str) -> tuple[dict[str, float], dict[str, str], str | None]:
     """Today's benchmark note rates by loan type, refreshed once a day.
 
     Attempts a live pull from mortgagenewsdaily.com; `_cache_date` (today's
     date, passed by the caller) is unused in the body but makes it part of
     Streamlit's cache key, so this re-runs at most once per calendar day
     per the TTL rather than once per server process lifetime -- the "every
-    day" refresh the rate presets are meant to have. Falls back to static
-    illustrative benchmarks if the live pull fails (always true in this
-    dev sandbox's restricted-egress environment; see pipeline/fetch_mortgage_rates.py).
-    Returns (rates, "live" | "fallback", fetched_at_iso | None).
+    day" refresh the rate presets are meant to have.
+
+    Each of the six loan types is resolved independently: a type the live
+    pull found is used as-is, any type it didn't (page unreachable, or
+    just that one label not found/renamed -- see
+    pipeline/fetch_mortgage_rates.py) falls back to the static snapshot in
+    FALLBACK_RATES on its own, rather than one missing label discarding
+    every rate that *did* parse correctly. Returns (rates, source_by_label,
+    fetched_at_iso | None), where source_by_label maps each loan type to
+    "live" or "fallback".
     """
-    live = fetch_live_rates()
-    if live is not None:
-        return live, "live", datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    return FALLBACK_RATES, "fallback", None
+    live = get_live_rates_partial()
+    fetched_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if live else None
+    rates = {}
+    source = {}
+    for label, fallback_value in FALLBACK_RATES.items():
+        if label in live:
+            rates[label] = live[label]
+            source[label] = "live"
+        else:
+            rates[label] = fallback_value
+            source[label] = "fallback"
+    return rates, source, fetched_at
 
 
 def normalized_weights(raw: dict[str, float]) -> dict[str, float]:
@@ -811,10 +825,13 @@ with tab_buydown:
         ["Standard Fixed"] + list(TEMPORARY_BUYDOWN_STRUCTURES.keys()) + ["Permanent Buydown (Discount Points)"]
     )
     # Rate presets refresh once a day: a live pull from mortgagenewsdaily.com
-    # when reachable, illustrative fallback benchmarks otherwise (always the
-    # fallback path in this dev sandbox -- see pipeline/fetch_mortgage_rates.py).
+    # when reachable, falling back to a manual snapshot for any loan type it
+    # couldn't find (always the fallback path for every type in this dev
+    # sandbox -- see pipeline/fetch_mortgage_rates.py). Resolved per loan
+    # type, not all-or-nothing, so one renamed/missing label on MND's page
+    # doesn't drag rates that DID parse correctly back to the snapshot too.
     _today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    live_rates, rate_source, rate_fetched_at = get_rate_presets(_today)
+    live_rates, rate_source_by_label, rate_fetched_at = get_rate_presets(_today)
     RATE_PRESETS: dict[str, float | None] = {"Custom (enter below)": None, **live_rates}
 
     input_col, summary_col = st.columns(2)
@@ -833,19 +850,19 @@ with tab_buydown:
             st.caption(f"{down_pct}% · \\${down_usd:,.0f}")
             term_years = st.slider("Loan term (years)", min_value=1, max_value=30, value=30, step=1)
 
+            any_live = any(v == "live" for v in rate_source_by_label.values())
             rate_preset_label = (
-                "Rate preset (live from mortgagenewsdaily.com)" if rate_source == "live"
-                else "Rate preset (illustrative benchmark)"
+                "Rate preset (live from mortgagenewsdaily.com)" if any_live
+                else "Rate preset (mortgagenewsdaily.com snapshot)"
             )
             rate_preset = st.selectbox(
                 rate_preset_label, options=list(RATE_PRESETS.keys()),
                 help=(
-                    f"Refreshed daily from mortgagenewsdaily.com (last fetched {rate_fetched_at})."
-                    if rate_source == "live" else
-                    "Live fetch from mortgagenewsdaily.com is unavailable right now, so these are "
-                    "illustrative typical rates by loan type instead. The app retries the live "
-                    "fetch daily. Check current rates at mortgagenewsdaily.com directly and use "
-                    "\"Custom\" to enter your own number below if these look stale."
+                    "Each loan type refreshes independently once a day from "
+                    "mortgagenewsdaily.com's Daily Rate Survey when reachable; a type "
+                    "that can't be found live falls back to a manual snapshot on its "
+                    "own, without affecting the others. Pick \"Custom\" to enter your "
+                    "own number below."
                 ),
             )
             preset_value = RATE_PRESETS[rate_preset]
@@ -855,16 +872,18 @@ with tab_buydown:
                 key=f"note_rate_{rate_preset}",
             )
             if preset_value is not None:
-                if rate_source == "live":
+                this_source = rate_source_by_label.get(rate_preset)
+                if this_source == "live":
                     st.caption(
                         f"🟢 Live rate from [mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
                         f"-- fetched {rate_fetched_at}, refreshes daily."
                     )
                 else:
                     st.caption(
-                        "🟠 Illustrative benchmark, not a live rate feed right now -- see "
+                        f"🟠 mortgagenewsdaily.com snapshot as of {FALLBACK_RATES_AS_OF} "
+                        "(live fetch unavailable for this loan type right now) -- see "
                         "[mortgagenewsdaily.com](https://www.mortgagenewsdaily.com/) "
-                        "for today's actual rates. The app retries the live fetch daily."
+                        "for today's actual rate. The app retries the live fetch daily."
                     )
 
             financing_type = st.radio("Financing type", FINANCING_OPTIONS, index=2)
