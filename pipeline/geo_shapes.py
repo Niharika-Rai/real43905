@@ -87,16 +87,20 @@ def _statefp_to_postal() -> dict[str, str]:
 
 @lru_cache(maxsize=1)
 def county_centroids() -> pd.DataFrame:
-    """Every U.S. county/county-equivalent: name, state, and an approximate center point.
+    """Every U.S. county/county-equivalent: name, state, bbox midpoint, and bbox extent.
 
-    "Centroid" here is the bounding-box midpoint of each county's shape,
-    not a true area-weighted geometric centroid (that would need a
-    geometry library like shapely, which this project avoids to keep the
-    dependency footprint small). For the reasonably compact counties
-    found near most metros this is a fine approximation for "which ring
-    is this county roughly in"; it can be noticeably off for a handful of
-    very large or oddly-shaped counties, mostly in the rural West -- a
-    documented limitation, not a silent one (surfaced in the app's ring
+    `lat`/`lon` are the bounding-box midpoint of each county's shape, not a
+    true area-weighted geometric centroid (that would need a geometry
+    library like shapely, which this project avoids to keep the dependency
+    footprint small). `counties_by_ring` below uses the fuller bbox extent
+    (`xmin`/`ymin`/`xmax`/`ymax`), not just this midpoint, to bucket a
+    county by its *nearest* edge to the metro's point rather than its
+    center -- the midpoint alone can be noticeably off for a large or
+    elongated county, placing it in a farther ring than any part of it
+    actually reaches. That nearest-edge distance is still only an
+    approximation of true distance-to-boundary (a rectangle standing in
+    for the county's real, irregular shape), not a geometric centroid --
+    a documented limitation, not a silent one (surfaced in the app's ring
     methodology note).
     """
     sf = shapefile.Reader(_COUNTY_SHAPEFILE)
@@ -113,6 +117,7 @@ def county_centroids() -> pd.DataFrame:
                 "state": postal,
                 "lon": (xmin + xmax) / 2,
                 "lat": (ymin + ymax) / 2,
+                "xmin": xmin, "ymin": ymin, "xmax": xmax, "ymax": ymax,
             }
         )
     return pd.DataFrame(rows)
@@ -125,10 +130,73 @@ def _haversine_miles(lat1, lon1, lat2, lon2):
     return _EARTH_RADIUS_MILES * 2 * np.arcsin(np.sqrt(a))
 
 
+@lru_cache(maxsize=1)
+def _county_geometries() -> list[dict]:
+    """Every county's name, state, bounding box, and full ring geometry.
+
+    Unlike `county_centroids()` (bbox-midpoint only, used for the coarser
+    ring-distance bucketing below), this keeps the actual polygon rings so
+    `_home_county()` can test true point-in-polygon containment -- the
+    bbox-midpoint approximation is specifically unreliable for large or
+    oddly-shaped counties, which is exactly when a metro's own "home"
+    county would otherwise wrongly drop out of the Urban Core ring.
+    """
+    sf = shapefile.Reader(_COUNTY_SHAPEFILE)
+    fp_to_postal = _statefp_to_postal()
+    out = []
+    for sr in sf.iterShapeRecords():
+        postal = fp_to_postal.get(sr.record["STATEFP"])
+        if postal is None:
+            continue
+        out.append(
+            {
+                "county": sr.record["NAME"],
+                "state": postal,
+                "bbox": sr.shape.bbox,  # (xmin, ymin, xmax, ymax)
+                "rings": _shape_to_rings(sr.shape),
+            }
+        )
+    return out
+
+
+def _point_in_ring(lon: float, lat: float, ring: list[tuple[float, float]]) -> bool:
+    """Standard even-odd ray-casting point-in-polygon test for one ring."""
+    inside = False
+    n = len(ring)
+    x1, y1 = ring[0]
+    for i in range(1, n + 1):
+        x2, y2 = ring[i % n]
+        if ((y1 > lat) != (y2 > lat)) and (lon < (x2 - x1) * (lat - y1) / (y2 - y1) + x1):
+            inside = not inside
+        x1, y1 = x2, y2
+    return inside
+
+
+def _home_county(lat: float, lon: float) -> str | None:
+    """The one county whose boundary actually contains (lat, lon), if any.
+
+    Checked via true point-in-polygon, not distance to an approximate
+    center -- a metro's coordinate is, by construction, inside its own
+    county, regardless of how large or irregularly shaped that county is
+    or where its bounding-box midpoint happens to fall. Bounding boxes
+    first narrow the ~3,233 counties down to the handful whose box could
+    possibly contain the point (cheap), before the exact ring test (only
+    run on those few candidates).
+    """
+    candidates = [
+        c for c in _county_geometries()
+        if c["bbox"][0] <= lon <= c["bbox"][2] and c["bbox"][1] <= lat <= c["bbox"][3]
+    ]
+    for c in candidates:
+        if any(_point_in_ring(lon, lat, ring) for ring in c["rings"]):
+            return f"{c['county']}, {c['state']}"
+    return None
+
+
 def counties_by_ring(
     center_lat: float, center_lon: float, ring_bounds: dict[str, tuple[float, float]]
 ) -> dict[str, list[str]]:
-    """Real county names whose approximate center falls in each ring's radius band.
+    """Real county names whose approximate extent falls in each ring's radius band.
 
     `ring_bounds` maps tier name -> (inner_miles, outer_miles), e.g. from
     pipeline.subareas.ring_bounds_miles(). Distance is true great-circle
@@ -136,11 +204,39 @@ def counties_by_ring(
     degree-based approximation used for the schematic ring circles drawn
     on the map (see pipeline/subareas.ring_circle_points) -- this listing
     is meant to be a real, checkable answer, not just a visual aid.
+
+    Each county is bucketed by its distance from (center_lat, center_lon) to
+    the *nearest point on that county's bounding box* -- 0 for a county
+    whose box contains the metro's point, otherwise the distance to the
+    box's near edge/corner -- rather than to the box's midpoint. A bbox
+    midpoint can sit far from a metro that's actually adjacent to (or just
+    inside) a large or elongated county; nearest-edge distance tracks each
+    county's true extent much more closely while still needing no new
+    geometry dependency. On top of that, the one county whose boundary
+    *actually contains* the metro's own point (almost always its "home"
+    county -- e.g. Santa Clara County for San Jose) is found via exact
+    point-in-polygon (_home_county) and guaranteed a spot in the ring
+    covering distance 0, even on the rare case a bbox-edge distance alone
+    would disagree.
     """
     df = county_centroids().copy()
-    df["dist_mi"] = _haversine_miles(center_lat, center_lon, df["lat"].to_numpy(), df["lon"].to_numpy())
+    clamped_lon = np.clip(center_lon, df["xmin"].to_numpy(), df["xmax"].to_numpy())
+    clamped_lat = np.clip(center_lat, df["ymin"].to_numpy(), df["ymax"].to_numpy())
+    df["dist_mi"] = _haversine_miles(center_lat, center_lon, clamped_lat, clamped_lon)
     out: dict[str, list[str]] = {}
     for tier, (lo, hi) in ring_bounds.items():
         sel = df[(df["dist_mi"] >= lo) & (df["dist_mi"] < hi)]
-        out[tier] = sorted(f"{r.county}, {r.state}" for r in sel.itertuples())
+        out[tier] = sorted({f"{r.county}, {r.state}" for r in sel.itertuples()})
+
+    home = _home_county(center_lat, center_lon)
+    if home is not None:
+        zero_tier = next((tier for tier, (lo, _hi) in ring_bounds.items() if lo == 0), None)
+        if zero_tier is not None:
+            # the home county belongs in the zero-distance ring alone -- drop
+            # it from any other ring its (less reliable) centroid distance
+            # placed it in, so it isn't shown twice at two different rings
+            for tier in out:
+                if tier != zero_tier and home in out[tier]:
+                    out[tier] = [c for c in out[tier] if c != home]
+            out[zero_tier] = sorted(set(out[zero_tier]) | {home})
     return out

@@ -601,13 +601,16 @@ than a custom-fit boundary for each one.
     county_bounds = ring_bounds_miles()
     county_lists = counties_by_ring(row["lat"], row["lon"], county_bounds)
     st.caption(
-        "Real Census county names, bucketed by great-circle distance from "
-        "this metro's center point to each county's approximate center "
-        "(bounding-box midpoint, not a precise area centroid) -- not "
-        "fabricated place names. A ring can legitimately come up empty: "
-        "counties are large administrative units, so a tight ring like "
-        "Urban Core (0-8 mi) often has no county center that close, even "
-        "though the metro's downtown is in a county that extends into it."
+        "Real Census county names (not fabricated place names), bucketed by "
+        "great-circle distance from this metro's center point to each "
+        "county's nearest edge (its bounding box, not its precise shape). "
+        "The metro's own \"home\" county -- the one its center point "
+        "actually sits inside -- is always placed in Urban Core, exactly "
+        "once, even for a large or irregularly-shaped county. A ring can "
+        "still occasionally come up empty for a metro bordered by very "
+        "large counties (common in parts of the rural West), where the "
+        "next-nearest county's edge skips past that ring's distance band "
+        "entirely."
     )
     cc1, cc2, cc3, cc4 = st.columns(4)
     for col, tier in zip((cc1, cc2, cc3, cc4), SUBAREA_TIERS):
@@ -617,7 +620,7 @@ than a custom-fit boundary for each one.
         if counties:
             col.markdown("\n".join(f"- {c}" for c in counties))
         else:
-            col.caption("No county center falls in this band.")
+            col.caption("No county falls in this band for this metro.")
 
     st.markdown(f"**Where within {metro_choice}**")
     st.caption(

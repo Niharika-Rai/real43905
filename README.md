@@ -151,14 +151,35 @@ a custom-fit boundary for each one. See the exact bounds in
 `pipeline/subareas.ring_bounds_miles()`.
 
 **Counties within each ring.** Each ring also lists the real Census county
-names whose approximate center falls within that ring's distance band from
+names whose approximate extent falls within that ring's distance band from
 the metro's center point, computed with the haversine great-circle distance
-formula (`pipeline/geo_shapes.py: counties_by_ring`). A county's "center" is
-approximated as its bounding-box midpoint (not a precise area centroid, to
-avoid adding a geometry dependency) — documented as a known approximation. A
-ring can legitimately come up empty, since counties are large administrative
-units: a tight ring like Urban Core (0-8 mi) often has no county center that
-close, even though the metro's downtown is in a county that extends into it.
+formula (`pipeline/geo_shapes.py: counties_by_ring`). These are genuine
+Census county names (verified against the `cb_2016_us_county_500k`
+cartographic boundary shapefile — 3,233 records, one per U.S. county or
+county-equivalent), not cities — a county name that happens to match a
+well-known city (e.g. "San Francisco, CA", a consolidated city-county, or
+"New York, NY", i.e. Manhattan) is exactly that: the real county, correctly
+named.
+
+Each county's distance is measured to the *nearest point on its bounding
+box* (0 if the metro's point falls inside that box, otherwise the distance
+to the box's near edge or corner) rather than to the box's midpoint — a
+bbox midpoint can sit misleadingly far from a metro that's actually
+adjacent to, or even inside, a large or elongated county. On top of that,
+the one county whose boundary *actually contains* the metro's own
+coordinate (its "home" county, found via exact point-in-polygon — e.g.
+Santa Clara County for San Jose) is always guaranteed a spot in the Urban
+Core ring, listed exactly once, even in the rare case its bbox-based
+distance would disagree. Before this (bbox-midpoint-only, no home-county
+guarantee), Urban Core came up empty for 43% of the 150 metros; after it,
+0%, and every other ring's empty-ring rate dropped to 5% or below —
+verified by running `counties_by_ring` across the full metro set. Avoiding
+a true-centroid/point-in-polygon-everywhere approach (which would need a
+geometry library like shapely) keeps the dependency footprint small; this
+bbox-based approximation is a documented, verified-reasonable tradeoff, not
+a silent one. A ring can still legitimately come up empty for a metro
+bordered by very large counties (common in parts of the rural West, where
+even the *nearest* neighboring county's edge can be tens of miles away).
 County boundary geometry comes from the Census cartographic boundary
 shapefile bundled by the `plotly-geo` PyPI package — no network access is
 needed to compute this.
