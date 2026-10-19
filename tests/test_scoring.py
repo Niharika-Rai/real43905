@@ -174,6 +174,28 @@ def test_counties_by_ring_returns_real_sorted_names():
         assert tier_list == sorted(tier_list)
 
 
+def test_counties_by_ring_home_county_in_urban_core():
+    # the county a metro's own point sits inside should always land in the
+    # zero-distance ring (Urban Core), even for a large/elongated county
+    # whose bounding-box midpoint sits well outside 8 miles
+    bounds = ring_bounds_miles()
+    cases = {
+        (37.3382, -121.8863): "Santa Clara, CA",  # San Jose
+        (41.8781, -87.6298): "Cook, IL",  # Chicago
+        (40.2338, -111.6585): "Utah, UT",  # Provo
+    }
+    for (lat, lon), expected_home_county in cases.items():
+        result = counties_by_ring(lat, lon, bounds)
+        assert expected_home_county in result["Urban Core"]
+
+
+def test_counties_by_ring_no_county_listed_twice_across_rings():
+    bounds = ring_bounds_miles()
+    result = counties_by_ring(41.8781, -87.6298, bounds)  # Chicago
+    all_counties = [c for tier_list in result.values() for c in tier_list]
+    assert len(all_counties) == len(set(all_counties))
+
+
 def test_state_rings_returns_points_for_known_state():
     rings = state_rings("CA")
     assert len(rings) > 0
