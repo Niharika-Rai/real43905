@@ -47,15 +47,30 @@ from report import build_pdf_report
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
 # shared geo styling (used by both the national map and the state-level
-# sub-metro ring map): plain/transparent page background, land (states)
-# tinted a very light blue instead of grey, state lines in a medium grey
-# for contrast against the tint. Both maps draw their own state polygons
-# from offline shapefile data (pipeline/geo_shapes.py) rather than using
+# sub-metro ring map): a true white page/land background, with a soft
+# slate-blue state/coastline stroke carrying all the geographic definition
+# (no land-vs-ocean tint). Both maps draw their own state polygons from
+# offline shapefile data (pipeline/geo_shapes.py) rather than using
 # Plotly's built-in basemap layers, which require a CDN fetch at render
 # time -- see the comment on fig_geo.update_geos below for why.
-GEO_LAND_COLOR = "rgb(222, 235, 247)"
-GEO_BG_COLOR = "rgba(0,0,0,0)"
-GEO_SUBUNIT_COLOR = "rgb(140, 140, 140)"
+GEO_LAND_COLOR = "#FFFFFF"
+GEO_BG_COLOR = "#FFFFFF"
+GEO_SUBUNIT_COLOR = "#A7BDD2"
+
+# Sequential (magnitude) palette for Opportunity Score, light -> dark blue,
+# matching the app's navy brand. Deliberately NOT a diverging red-yellow-green
+# scale: the score is a single continuous magnitude (0-100) with no meaningful
+# "opposite poles" midpoint, so a diverging colorscale would misrepresent it
+# and (per standard data-viz accessibility guidance) would also force a
+# red/green pairing that's hard to distinguish for the most common forms of
+# color vision deficiency. 13-stop ramp validated for sequential/choropleth
+# use (colorblind-safe at every step).
+SCORE_COLORSCALE = [
+    [0 / 12, "#cde2fb"], [1 / 12, "#b7d3f6"], [2 / 12, "#9ec5f4"], [3 / 12, "#86b6ef"],
+    [4 / 12, "#6da7ec"], [5 / 12, "#5598e7"], [6 / 12, "#3987e5"], [7 / 12, "#2a78d6"],
+    [8 / 12, "#256abf"], [9 / 12, "#1c5cab"], [10 / 12, "#184f95"], [11 / 12, "#104281"],
+    [12 / 12, "#0d366b"],
+]
 
 st.set_page_config(
     page_title="Affordable Housing Opportunity Explorer",
@@ -328,10 +343,16 @@ with tab_map:
         lat=scored["lat"], lon=scored["lon"], mode="markers",
         marker=dict(
             size=scored["population"], sizemode="area",
-            sizeref=2.0 * max_pop / (42 ** 2), sizemin=4,
-            color=scored["opportunity_score"], colorscale="RdYlGn", cmin=0, cmax=100,
-            colorbar=dict(title="Opportunity<br>Score"),
-            line=dict(width=0.5, color="rgba(40,40,40,0.5)"),
+            sizeref=2.0 * max_pop / (42 ** 2), sizemin=8,
+            color=scored["opportunity_score"], colorscale=SCORE_COLORSCALE, cmin=0, cmax=100,
+            colorbar=dict(
+                title=dict(text="Opportunity<br>Score", font=dict(size=13)),
+                thickness=16, len=0.7, outlinewidth=0,
+                tickfont=dict(size=12, color="#52514E"),
+            ),
+            # a white "surface ring" around each bubble (not a dark outline)
+            # keeps overlapping metros legible without adding visual weight
+            line=dict(width=2, color="#FFFFFF"),
         ),
         text=scored["metro"],
         customdata=scored[["opportunity_score", "shortage_score", "feasibility_score", "population"]],
@@ -340,6 +361,7 @@ with tab_map:
             "Shortage: %{customdata[1]:.1f} · Feasibility: %{customdata[2]:.1f}<br>"
             "Population: %{customdata[3]:,.0f}<extra></extra>"
         ),
+        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor="#A7BDD2", font=dict(color="#0B0B0B", size=13)),
         showlegend=False,
     ))
 
@@ -350,8 +372,11 @@ with tab_map:
         showlakes=False, showsubunits=False, showocean=False, showframe=False,
         bgcolor=GEO_BG_COLOR,
     )
-    fig.update_layout(height=640, margin=dict(l=0, r=0, t=10, b=0))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(
+        height=640, margin=dict(l=0, r=0, t=10, b=0),
+        paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+    )
+    st.plotly_chart(fig, use_container_width=True, theme=None)
 
 # ---------------------------------------------------------- metro breakdown --
 with tab_breakdown:
@@ -658,11 +683,11 @@ than a custom-fit boundary for each one.
         tier_row = by_tier.loc[tier]
         radius = RING_OUTER_RADIUS_MILES[tier]
         lats, lons = ring_circle_points(row["lat"], row["lon"], radius)
-        color = pcolors.sample_colorscale("RdYlGn", [tier_row["opportunity_score"] / 100])[0]
+        color = pcolors.sample_colorscale(SCORE_COLORSCALE, [tier_row["opportunity_score"] / 100])[0]
         fig_geo.add_trace(go.Scattergeo(
             lat=lats, lon=lons, mode="lines", fill="toself",
-            fillcolor=color, line=dict(color="rgba(80,80,80,0.5)", width=1),
-            opacity=0.75, name=f"{tier} ({tier_row['opportunity_score']:.0f})",
+            fillcolor=color, line=dict(color="rgba(21,52,79,0.45)", width=1),
+            opacity=0.8, name=f"{tier} ({tier_row['opportunity_score']:.0f})",
             hoverinfo="text",
             text=(
                 f"{tier}<br>Local Opportunity: {tier_row['opportunity_score']:.0f}<br>"
@@ -672,8 +697,9 @@ than a custom-fit boundary for each one.
         ))
     fig_geo.add_trace(go.Scattergeo(
         lat=[row["lat"]], lon=[row["lon"]], mode="markers+text",
-        marker=dict(size=11, color="black", symbol="star"),
+        marker=dict(size=11, color="#15344F", symbol="star", line=dict(width=1.5, color="#FFFFFF")),
         text=[metro_choice], textposition="top center",
+        textfont=dict(color="#15344F", size=13),
         name="Metro center", hoverinfo="text",
     ))
 
@@ -697,9 +723,10 @@ than a custom-fit boundary for each one.
     )
     fig_geo.update_layout(
         height=560, margin=dict(l=0, r=0, t=10, b=0),
-        legend=dict(bgcolor="rgba(255,255,255,0.85)", orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+        legend=dict(bgcolor="rgba(255,255,255,0.9)", orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
-    st.plotly_chart(fig_geo, use_container_width=True)
+    st.plotly_chart(fig_geo, use_container_width=True, theme=None)
 
 # --------------------------------------------------------- metro comparison --
 with tab_compare:
