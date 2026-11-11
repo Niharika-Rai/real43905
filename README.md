@@ -20,10 +20,15 @@ Live app: deploy to [Render](https://render.com) using `render.yaml` (see
   as CSV. Every column header has a hover tooltip explaining what it shows
   and how it's calculated.
 - **Map** — metros plotted on a real U.S. basemap (land, state borders,
-  coastlines), bubble size = population, color = Opportunity Score
+  coastlines), bubble size = population, color = Opportunity Score. **Click
+  a bubble** to pre-select that metro in the Metro Breakdown tab's dropdown
+  (open that tab afterward to see it -- Streamlit has no API to also switch
+  the active tab for you).
 - **Metro Breakdown** — per-metro Shortage component z-scores, a Feasibility
   cost waterfall, editable land-cost/hard-cost overrides, an "Add to
-  Comparison" button, and a **sub-metro "zoom in"**: every metro is broken
+  Comparison" button, a **full underwriting pro forma** (lender debt sizing
+  and a levered IRR over an adjustable hold period, on top of the
+  Feasibility screen), and a **sub-metro "zoom in"**: every metro is broken
   into four illustrative submarket rings (Urban Core, Inner Suburbs, Outer
   Suburbs, Exurban / Micropolitan Fringe) ranked against each other so a
   developer can see *where within the metro* the numbers work best, not just
@@ -97,6 +102,47 @@ rings — recomputes from the override, re-ranked against the other 149
 metros' baseline estimates. The Ranked Table tab always shows the baseline
 (non-overridden) scores, so an overridden metro's rank on Metro Breakdown may
 differ slightly from its rank on the Ranked Table.
+
+### Full underwriting: IRR & debt sizing
+
+The Feasibility Score answers a screening question -- does this metro's
+supportable value clear its development cost -- but it stops short of an
+actual pro forma. The Metro Breakdown tab's "Full Underwriting" section
+(`underwriting.py`) takes that same NOI and development cost and adds the
+two things a lender and an equity investor actually size a deal on:
+
+- **Debt sizing** -- the maximum loan a lender would support under a target
+  debt-service coverage ratio (DSCR) *and* a maximum loan-to-cost (LTV) cap,
+  whichever binds tighter. Equity required is simply development cost minus
+  that loan.
+- **Levered IRR** -- a cash-flow schedule over an adjustable hold period
+  (NOI growing at a constant annual rate, standard loan amortization), with
+  an exit sale valued off the *forward* NOI (one year past the hold period)
+  at an adjustable exit cap rate, net of the remaining loan balance and
+  selling costs. IRR is solved via bisection on the cash-flow stream's net
+  present value -- no new dependency, just `finance.monthly_payment` reused
+  for the loan constant and a repaid-balance formula for the payoff.
+
+All seven assumptions (hold period, NOI growth, exit cap spread, selling
+costs, target DSCR, max LTV, loan rate/amortization) are adjustable in an
+expander, keyed per metro so switching metros resets them to sensible
+defaults rather than carrying over a previous metro's overrides. Like the
+rest of the Feasibility side, this is illustrative screening math -- a real
+deal still needs an actual lender term sheet and a licensed appraisal, and
+the README's existing disclaimer about synthetic cost inputs applies here
+too, since development cost and NOI feed directly into it.
+
+### Map click-to-navigate
+
+Clicking a bubble on the national map (`st.plotly_chart`'s `on_select`
+support) pre-selects that metro in the Metro Breakdown tab's dropdown, so
+it's already showing the right metro the moment you open that tab.
+Streamlit has no public API to also switch which tab is visually active
+from a callback, so this is "click here, then open Metro Breakdown," not a
+single jump across tabs -- a known, disclosed limitation rather than a bug.
+The click is tracked against the chart's `curve_number`/`point_index`
+selection payload, scoped to the metro bubble trace specifically, so
+clicking a background state polygon is never mistaken for picking a metro.
 
 ### Sub-metro zoom-in rings
 
@@ -341,6 +387,7 @@ app.py                      Streamlit app (entry point)
 metros.py                   150-metro reference table (CBSA, lat/lon, tier)
 scoring.py                  Shortage / Feasibility / Opportunity score formulas
 finance.py                  Mortgage amortization + temporary/permanent buy-down calculators
+underwriting.py              Lender debt sizing + levered IRR (full underwriting pro forma)
 report.py                   PDF report builder for the Metro Comparison shortlist (reportlab)
 pipeline/
   anchors.py                 Real, published home-price/income anchors for all 150 metros
@@ -359,6 +406,7 @@ tests/
   test_scoring.py               Unit tests for scoring math, finance calculators, and geo helpers
   test_fetch_mortgage_rates.py  Unit tests for the rate-preset scraper's parsing and fallback behavior
   test_report.py                Unit tests for PDF report generation
+  test_underwriting.py          Unit tests for debt sizing, amortization payoff, and IRR
 render.yaml                  Render Blueprint (web service + optional weekly refresh cron job)
 requirements.txt
 ```
@@ -469,17 +517,32 @@ after that) on a deployment that can reach mortgagenewsdaily.com.
 ## MVP scope (per charter)
 
 **In:** 150 U.S. metros; Shortage, Feasibility, Opportunity scores; ranked
-table (with tooltips) and map; per-metro score breakdown with editable cost
-overrides and real county-ring detail; Metro Comparison with a downloadable
+table (with tooltips) and a click-to-navigate map; per-metro score breakdown
+with editable cost overrides, full underwriting (IRR and lender debt
+sizing), and real county-ring detail; Metro Comparison with a downloadable
 PDF report; α/β and AMI-tier configuration sliders; buy-down calculator with
 multiple financing structures and daily-refreshing rate presets (live when
 reachable, illustrative fallback otherwise); scheduled batch data refresh.
 
 **Deferred:** parcel-level siting (below the county-ring level); licensed
-CoStar/RCA integration; full underwriting outputs (IRR, debt sizing); actual
-loan origination workflow; developer user accounts for personalization;
-saved/persistent Metro Comparison shortlists across sessions (currently
-session-only, exportable as PDF/CSV before the session ends).
+CoStar/RCA integration (not pursued at all -- see **Why median home price &
+household income are "published," not synthetic** and **Why most other
+fields are still synthetic today** below for the free-data-only rationale);
+actual loan origination workflow; developer user accounts for
+personalization; saved/persistent Metro Comparison shortlists across
+sessions; faster cold-start load time.
+
+**Deliberately not pursued:** persistent (server-saved) Metro Comparison
+shortlists and a faster cold-start are both on the project's own roadmap
+slide, but neither is being built for this deployment. Persistent
+shortlists would need real server-side storage keyed to a visitor somehow
+-- exactly the kind of state-holding surface this project would rather not
+introduce without a real auth/security design behind it, so the shortlist
+stays session-only and exportable (PDF/CSV) instead, by choice, not
+oversight. The cold-start delay is a direct consequence of hosting on
+Render's **free** tier (see **Scheduled batch data refresh** above) --
+fixing it means upgrading to a paid plan, a hosting-cost decision for the
+project owner, not something the app's code can solve on its own.
 
 ## Disclaimer
 
