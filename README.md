@@ -200,6 +200,19 @@ outside that band (`app.py`'s `_clamp_to_ring`) — so a county already
 inside its own ring's band is left at its real position, and only a
 genuine mismatch gets pulled back in.
 
+**No double-labeling the metro center.** The metro's *home* county — the
+one whose boundary actually contains its coordinate (e.g. Los Angeles
+County for the Los Angeles metro, found via `pipeline.geo_shapes.home_county`'s
+point-in-polygon test) — is guaranteed a spot in the Urban Core ring's text
+list, since it's always the ring membership readers most expect to see.
+But it sits at essentially the same point the star already marks as the
+metro center, so plotting it as its own marker too would show the same
+real-world place labeled twice (once as the metro's name via the star,
+once again as the county's name), reading as two different locations
+rather than one. The home county is therefore skipped when plotting map
+markers (still listed normally in the Urban Core text list below) so the
+star is the only thing marking the metro center.
+
 Both this map and the national map share the same Opportunity Score color
 scale (`SCORE_COLORSCALE` in `app.py`) so a color always means the same
 score across both — a light-to-medium-blue sequential ramp, deliberately
