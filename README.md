@@ -21,9 +21,9 @@ Live app: deploy to [Render](https://render.com) using `render.yaml` (see
   and how it's calculated.
 - **Map** — metros plotted on a real U.S. basemap (land, state borders,
   coastlines), bubble size = population, color = Opportunity Score. **Click
-  a bubble** to pre-select that metro in the Metro Breakdown tab's dropdown
-  (open that tab afterward to see it -- Streamlit has no API to also switch
-  the active tab for you).
+  a bubble** to jump straight to that metro's Metro Breakdown — a single
+  click takes you there with that metro already selected, no manual tab
+  switch needed.
 - **Metro Breakdown** — per-metro Shortage component z-scores, a Feasibility
   cost waterfall, editable land-cost/hard-cost overrides, an "Add to
   Comparison" button, a **full underwriting pro forma** (lender debt sizing
@@ -33,7 +33,8 @@ Live app: deploy to [Render](https://render.com) using `render.yaml` (see
   Suburbs, Exurban / Micropolitan Fringe) ranked against each other so a
   developer can see *where within the metro* the numbers work best, not just
   which metro nationally ranks highest. Each ring also lists the real Census
-  counties that fall within it, and an expander explains exactly how the
+  counties that fall within it (and plots them directly on the ring map,
+  colored to match their ring), and an expander explains exactly how the
   ring radii were chosen.
 - **Metro Comparison** — a shortlist of metros added from the Metro
   Breakdown tab, shown side-by-side: a grouped bar chart and a full
@@ -135,14 +136,21 @@ too, since development cost and NOI feed directly into it.
 ### Map click-to-navigate
 
 Clicking a bubble on the national map (`st.plotly_chart`'s `on_select`
-support) pre-selects that metro in the Metro Breakdown tab's dropdown, so
-it's already showing the right metro the moment you open that tab.
-Streamlit has no public API to also switch which tab is visually active
-from a callback, so this is "click here, then open Metro Breakdown," not a
-single jump across tabs -- a known, disclosed limitation rather than a bug.
-The click is tracked against the chart's `curve_number`/`point_index`
-selection payload, scoped to the metro bubble trace specifically, so
-clicking a background state polygon is never mistaken for picking a metro.
+support) jumps straight to the Metro Breakdown section with that metro
+already selected -- a single click, no manual tab switch. This works because
+the app's section navigation is built on `st.segmented_control` (a normal,
+keyed widget) rather than `st.tabs()`, which has no public API to switch the
+active tab programmatically; the click handler stages the target section in
+a separate session-state key and triggers one `st.rerun()`, which applies it
+to the navigation widget's own key before that widget is instantiated for
+the new run (writing directly to a widget's key after it has already
+rendered in the same run raises `StreamlitWidgetAlreadyInstantiatedError`,
+which is what this two-step staging avoids). The click is tracked against
+the chart's `curve_number`/`point_index` selection payload, scoped to the
+metro bubble trace specifically, so clicking a background state polygon is
+never mistaken for picking a metro, and a `_last_map_click` guard makes sure
+a stale/persisted selection from an earlier run doesn't re-trigger
+navigation on an unrelated rerun.
 
 ### Sub-metro zoom-in rings
 
@@ -169,9 +177,35 @@ metro," not "how does this ring compare to a different metro."
 
 Below the ring table/chart, the Metro Breakdown tab also plots the metro's
 home state (drawn offline — see `pipeline/geo_shapes.py`) with a star at
-the metro's center and the four rings as concentric shaded bands around it
+the metro's center, the four rings as concentric shaded bands around it
 (via `pipeline.subareas.ring_circle_points`), colored by each ring's local
-Opportunity Score.
+Opportunity Score, and the real Census counties within each ring plotted
+directly on the map at their approximate centers, colored to match their
+ring (labels are shown when a ring has 8 or fewer counties, and suppressed
+— markers and hover text only — for denser rings, so a crowded outer ring
+doesn't turn into an unreadable pile of text).
+
+Both this map and the national map share the same Opportunity Score color
+scale (`SCORE_COLORSCALE` in `app.py`) so a color always means the same
+score across both — a light-to-medium-blue sequential ramp, deliberately
+stopping at a clear medium-strong blue rather than running to near-black,
+so the two maps' shades stay visually distinguishable at a glance.
+
+This chart is built as a plain Cartesian scatter plot (`go.Scatter`, with
+longitude pre-scaled by cos(metro latitude) and the y-axis locked to the
+same scale as x) rather than Plotly's geo (`go.Scattergeo`) subplot type.
+That's a deliberate workaround, not a style choice: the plotly.js version
+Streamlit 1.63 bundles in its frontend (v3.7.0) has a bug in its geo
+auto-scale-fit for a narrow, zoomed-in `lataxis_range`/`lonaxis_range` —
+it collapses the whole map down to a single point — even though the
+identical figure renders correctly under a newer plotly.js (verified
+directly by exporting the same figure to a standalone HTML file with
+`plotly==7.0.0`'s bundled plotly.js v4.0.0, where it renders fine). The
+national map doesn't hit this bug because its much wider, near-default
+lat/lon range happens to need no real auto-fit. A Cartesian scatter needs
+no geo auto-fit at all, so it sidesteps the bug entirely while looking
+identical to the geo version (same offline state-boundary shapefile data,
+same ring circles, same county markers).
 
 **Ring radii — how they were chosen.** The four rings use fixed radii — 8 /
 20 / 40 / 70 miles — applied the same way to every metro. They are not

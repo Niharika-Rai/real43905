@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from metros import metros_frame
-from pipeline.geo_shapes import state_rings, national_background_rings, counties_by_ring
+from pipeline.geo_shapes import state_rings, national_background_rings, counties_by_ring, county_centroids
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
 from pipeline.subareas import (
     generate_subarea_dataset,
@@ -66,11 +66,15 @@ GEO_SUBUNIT_COLOR = "#A7BDD2"
 # red/green pairing that's hard to distinguish for the most common forms of
 # color vision deficiency. 13-stop ramp validated for sequential/choropleth
 # use (colorblind-safe at every step).
+# Lighter than the original ramp (which ran all the way to a near-black
+# navy, #0d366b) -- the darkest step here, #2667b8, is a clear medium-strong
+# blue rather than something that reads as "almost black" next to the white
+# page and the navy UI chrome, so high-scoring bubbles/rings stay easy to
+# tell apart from text and borders instead of all looking like one dark blob.
 SCORE_COLORSCALE = [
-    [0 / 12, "#cde2fb"], [1 / 12, "#b7d3f6"], [2 / 12, "#9ec5f4"], [3 / 12, "#86b6ef"],
-    [4 / 12, "#6da7ec"], [5 / 12, "#5598e7"], [6 / 12, "#3987e5"], [7 / 12, "#2a78d6"],
-    [8 / 12, "#256abf"], [9 / 12, "#1c5cab"], [10 / 12, "#184f95"], [11 / 12, "#104281"],
-    [12 / 12, "#0d366b"],
+    [0 / 6, "#eaf2fc"], [1 / 6, "#d3e6fa"], [2 / 6, "#b3d3f5"],
+    [3 / 6, "#8ebcee"], [4 / 6, "#649fe3"], [5 / 6, "#3d82d6"],
+    [6 / 6, "#2667b8"],
 ]
 
 st.set_page_config(
@@ -230,16 +234,38 @@ if "live-refresh" not in str(data_vintage):
 if "comparison_metros" not in st.session_state:
     st.session_state.comparison_metros = []
 
-tab_rank, tab_map, tab_breakdown, tab_compare, tab_buydown, tab_sources = st.tabs(
-    [
-        "\U0001F4CA Ranked Table", "\U0001F5FA️ Map", "\U0001F50D Metro Breakdown",
-        f"\U0001F4CB Metro Comparison ({len(st.session_state.comparison_metros)})",
-        "\U0001F3E1 Buy-Down Calculator", "\U0001F4C1 Data Sources",
-    ]
+# A plain st.tabs() can't be driven by session_state -- Streamlit has no API
+# to programmatically switch which tab is active, which is exactly what the
+# map's click-to-navigate needs (see tab_map below). st.segmented_control is
+# a normal keyed widget instead, so its value can be set from code just like
+# the metro dropdown already is. format_func keeps the pretty, emoji'd,
+# live-count label separate from the stable section key Python branches on,
+# so a changing Metro Comparison count never confuses the selection itself.
+#
+# Streamlit refuses to write st.session_state["active_section"] once that
+# widget has rendered THIS run (a "cannot modify after instantiation"
+# error) -- the map section (which decides to navigate) necessarily runs
+# AFTER the nav widget above it. So a click stages the target in
+# _pending_section and calls st.rerun(); this block, which runs before the
+# widget is created, applies it on the fresh run that follows.
+if "_pending_section" in st.session_state:
+    st.session_state["active_section"] = st.session_state.pop("_pending_section")
+
+SECTION_LABELS = {
+    "rank": "\U0001F4CA Ranked Table",
+    "map": "\U0001F5FA️ Map",
+    "breakdown": "\U0001F50D Metro Breakdown",
+    "compare": f"\U0001F4CB Metro Comparison ({len(st.session_state.comparison_metros)})",
+    "buydown": "\U0001F3E1 Buy-Down Calculator",
+    "sources": "\U0001F4C1 Data Sources",
+}
+active_section = st.segmented_control(
+    "Navigate", options=list(SECTION_LABELS.keys()), format_func=lambda k: SECTION_LABELS[k],
+    default="rank", required=True, key="active_section", label_visibility="collapsed",
 )
 
 # ------------------------------------------------------------- ranked table --
-with tab_rank:
+if active_section == "rank":
     st.subheader("Ranked by Opportunity Score")
     display_cols = {
         "rank": "Rank",
@@ -323,7 +349,7 @@ with tab_rank:
     )
 
 # ---------------------------------------------------------------------- map --
-with tab_map:
+if active_section == "map":
     st.subheader("Opportunity Score by Metro")
     st.caption(
         "Bubble size = population, color = Opportunity Score. Hover a metro "
@@ -387,15 +413,16 @@ with tab_map:
         on_select="rerun", selection_mode="points", key="national_map_chart",
     )
 
-    # click-to-navigate: a freshly clicked bubble pre-selects that metro in
-    # the Metro Breakdown tab's dropdown. Streamlit's selection state
-    # persists across reruns, so this only fires on a genuinely NEW click
-    # (tracked via _last_map_click) -- otherwise an unrelated rerun (e.g.
-    # moving a sidebar slider) would keep stomping on a metro the user
-    # picked manually from the dropdown afterward. Streamlit has no public
-    # API to also switch which tab is visually active, so the handoff is
-    # "click here, then open Metro Breakdown" rather than a single jump --
-    # see the README for that limitation.
+    # click-to-navigate: a freshly clicked bubble jumps straight to the
+    # Metro Breakdown section, with that metro already selected. Streamlit's
+    # plotly selection state persists across reruns, so this only fires on
+    # a genuinely NEW click (tracked via _last_map_click) -- otherwise an
+    # unrelated rerun (e.g. moving a sidebar slider) would keep forcing the
+    # view back to Breakdown even after the user manually switched
+    # elsewhere. st.segmented_control (not st.tabs, which can't be driven by
+    # code at all) is what makes the actual jump possible: setting its keyed
+    # session_state value and rerunning lands on Breakdown with this run,
+    # not just "ready the next time you click the tab yourself."
     clicked_points = (map_event.selection.get("points") if map_event and map_event.selection else []) or []
     bubble_points = [p for p in clicked_points if p.get("curve_number") == marker_curve_number]
     if bubble_points:
@@ -405,13 +432,12 @@ with tab_map:
             if st.session_state.get("_last_map_click") != clicked_metro:
                 st.session_state["_last_map_click"] = clicked_metro
                 st.session_state["metro_choice_select"] = clicked_metro
-            st.success(
-                f"**{clicked_metro}** selected -- open the **Metro Breakdown** tab to see it.",
-                icon="📍",
-            )
+                st.session_state["_pending_section"] = "breakdown"
+                st.toast(f"Jumped to **{clicked_metro}**", icon="📍")
+                st.rerun()
 
 # ---------------------------------------------------------- metro breakdown --
-with tab_breakdown:
+if active_section == "breakdown":
     st.subheader("Per-Metro Score Breakdown")
     metro_choice = st.selectbox(
         "Choose a metro", options=scored["metro"].tolist(), key="metro_choice_select",
@@ -808,12 +834,32 @@ than a custom-fit boundary for each one.
     )
 
     by_tier = subarea_scored.set_index("subarea")
+
+    # NOTE: this plots lon/lat on a plain Cartesian axis pair rather than a
+    # Plotly geo (Scattergeo) subplot. Two reasons: (1) it deliberately
+    # avoids Plotly's built-in basemap layers (showland/showcountries/etc,
+    # and especially scope="usa" or projection_type="albers usa") -- all of
+    # them fetch topojson from cdn.plot.ly at render time, which is blocked
+    # in restricted networks. (2) the geo subplot's own auto-scale-fit
+    # (projection.scale derived from lataxis_range/lonaxis_range) is broken
+    # for a narrow, zoomed-in range in the plotly.js version Streamlit 1.63
+    # bundles (v3.7.0) -- it collapses the whole map to a single point --
+    # even though the identical figure renders fine under a newer plotly.js.
+    # A Cartesian scatter sidesteps that bug entirely. `_lon_scale` corrects
+    # for longitude compression at this latitude (same factor
+    # ring_circle_points uses for its own radius math) so a physical circle
+    # still looks round once the y-axis is locked to the same scale as x.
+    _lon_scale = max(0.15, math.cos(math.radians(row["lat"])))
+
+    def _x(lon: float) -> float:
+        return lon * _lon_scale
+
     fig_geo = go.Figure()
     for ring in state_rings(row["state"]):
-        lons = [p[0] for p in ring]
+        lons = [_x(p[0]) for p in ring]
         lats = [p[1] for p in ring]
-        fig_geo.add_trace(go.Scattergeo(
-            lon=lons, lat=lats, mode="lines", fill="toself",
+        fig_geo.add_trace(go.Scatter(
+            x=lons, y=lats, mode="lines", fill="toself",
             fillcolor=GEO_LAND_COLOR, line=dict(color=GEO_SUBUNIT_COLOR, width=1.5),
             showlegend=False, hoverinfo="skip",
         ))
@@ -822,8 +868,8 @@ than a custom-fit boundary for each one.
         radius = RING_OUTER_RADIUS_MILES[tier]
         lats, lons = ring_circle_points(row["lat"], row["lon"], radius)
         color = pcolors.sample_colorscale(SCORE_COLORSCALE, [tier_row["opportunity_score"] / 100])[0]
-        fig_geo.add_trace(go.Scattergeo(
-            lat=lats, lon=lons, mode="lines", fill="toself",
+        fig_geo.add_trace(go.Scatter(
+            x=[_x(ln) for ln in lons], y=lats, mode="lines", fill="toself",
             fillcolor=color, line=dict(color="rgba(21,52,79,0.45)", width=1),
             opacity=0.8, name=f"{tier} ({tier_row['opportunity_score']:.0f})",
             hoverinfo="text",
@@ -833,41 +879,64 @@ than a custom-fit boundary for each one.
                 f"~{radius:.0f} mi radius (illustrative)"
             ),
         ))
-    fig_geo.add_trace(go.Scattergeo(
-        lat=[row["lat"]], lon=[row["lon"]], mode="markers+text",
+    fig_geo.add_trace(go.Scatter(
+        x=[_x(row["lon"])], y=[row["lat"]], mode="markers+text",
         marker=dict(size=11, color="#15344F", symbol="star", line=dict(width=1.5, color="#FFFFFF")),
         text=[metro_choice], textposition="top center",
         textfont=dict(color="#15344F", size=13),
         name="Metro center", hoverinfo="text",
     ))
 
+    # plot the same real Census counties listed in the table above directly
+    # on the map, at each county's approximate center (its bounding-box
+    # midpoint -- the same approximation counties_by_ring itself is built
+    # on), colored to match the ring they belong to so the list above and
+    # the map below visibly agree with each other
+    _cc = county_centroids()
+    _county_coords = pd.Series(
+        list(zip(_cc["lat"], _cc["lon"])), index=_cc["county"] + ", " + _cc["state"],
+    )
+    _county_coords = _county_coords[~_county_coords.index.duplicated()]
+    for tier in reversed(SUBAREA_TIERS):
+        tier_row = by_tier.loc[tier]
+        ring_color = pcolors.sample_colorscale(SCORE_COLORSCALE, [tier_row["opportunity_score"] / 100])[0]
+        names = [n for n in county_lists.get(tier, []) if n in _county_coords.index]
+        if not names:
+            continue
+        pts_lat = [_county_coords[n][0] for n in names]
+        pts_lon = [_county_coords[n][1] for n in names]
+        # a crowded ring (common for a dense metro's outer rings) skips the
+        # always-on text labels so they don't pile into an unreadable mess --
+        # the county is still plotted and still fully named on hover
+        show_labels = len(names) <= 8
+        fig_geo.add_trace(go.Scatter(
+            x=[_x(ln) for ln in pts_lon], y=pts_lat,
+            mode="markers+text" if show_labels else "markers",
+            marker=dict(size=7, color=ring_color, line=dict(width=1, color="#FFFFFF")),
+            text=[n.split(",")[0] for n in names] if show_labels else None,
+            textposition="bottom center", textfont=dict(size=9, color="#15344F"),
+            hoverinfo="text", hovertext=[f"{n} · {tier}" for n in names],
+            name=f"{tier} counties", showlegend=False,
+        ))
+
     lat_margin = 85 / MILES_PER_DEGREE_LAT
-    lon_margin = 85 / (MILES_PER_DEGREE_LAT * max(0.15, math.cos(math.radians(row["lat"]))))
-    fig_geo.update_geos(
-        # NOTE: this deliberately avoids Plotly's built-in basemap layers
-        # (showland/showcountries/showcoastlines/etc, and especially
-        # scope="usa" or projection_type="albers usa") -- all of them
-        # fetch topojson from cdn.plot.ly at render time, which is blocked
-        # in restricted networks and rendered this map blank before. The
-        # state outline and everything else visible here is drawn from our
-        # own offline shapefile data (pipeline/geo_shapes.py) instead, so
-        # this map needs no network access at all.
-        projection_type="mercator",
-        lataxis_range=[row["lat"] - lat_margin, row["lat"] + lat_margin],
-        lonaxis_range=[row["lon"] - lon_margin, row["lon"] + lon_margin],
-        showland=False, showcountries=False, showcoastlines=False,
-        showlakes=False, showsubunits=False, showocean=False, showframe=False,
-        bgcolor=GEO_BG_COLOR,
+    lon_margin = 85 / (MILES_PER_DEGREE_LAT * _lon_scale)
+    fig_geo.update_xaxes(
+        range=[_x(row["lon"] - lon_margin), _x(row["lon"] + lon_margin)],
+        visible=False, scaleanchor="y", scaleratio=1,
+    )
+    fig_geo.update_yaxes(
+        range=[row["lat"] - lat_margin, row["lat"] + lat_margin], visible=False,
     )
     fig_geo.update_layout(
         height=560, margin=dict(l=0, r=0, t=10, b=0),
-        paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+        paper_bgcolor="#FFFFFF", plot_bgcolor=GEO_BG_COLOR,
         legend=dict(bgcolor="rgba(255,255,255,0.9)", orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
     st.plotly_chart(fig_geo, use_container_width=True, theme=None)
 
 # --------------------------------------------------------- metro comparison --
-with tab_compare:
+if active_section == "compare":
     st.subheader("Metro Comparison")
     st.caption(
         "Side-by-side comparison of metros added from the Metro Breakdown "
@@ -977,7 +1046,7 @@ with tab_compare:
         )
 
 # ------------------------------------------------------------- buy-down calc --
-with tab_buydown:
+if active_section == "buydown":
     st.subheader("Buy-Down Calculator")
     st.caption("Illustrative only -- not a loan offer, rate quote, or financial advice.")
 
@@ -1193,7 +1262,7 @@ with tab_buydown:
     stat3.metric(f"Opportunity Score -- {buydown_metro}", f"{metro_ctx['opportunity_score']:.0f} / 100")
 
 # ------------------------------------------------------------------ sources --
-with tab_sources:
+if active_section == "sources":
     st.subheader("Data Sources & Provenance")
     st.markdown(
         """
