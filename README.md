@@ -185,6 +185,21 @@ ring (labels are shown when a ring has 8 or fewer counties, and suppressed
 — markers and hover text only — for denser rings, so a crowded outer ring
 doesn't turn into an unreadable pile of text).
 
+**Keeping county markers and ring membership consistent.** `counties_by_ring`
+assigns a county to a tier by the distance from the metro center to the
+*nearest edge* of that county's bounding box (so a large county counts once
+any part of it reaches into a ring), but a county's plotted marker position
+is its bbox *midpoint* — for a large county those two distances can differ
+enough that the midpoint lands in a visually different ring than the one
+the county was actually assigned to, or, for an outer-tier county, even
+outside the drawn map entirely. To keep the map and the adjacent county
+list always in agreement, each marker keeps its real compass bearing from
+the metro center but has its *radius* clamped into its assigned tier's
+[inner, outer) band whenever the raw bbox-midpoint distance would place it
+outside that band (`app.py`'s `_clamp_to_ring`) — so a county already
+inside its own ring's band is left at its real position, and only a
+genuine mismatch gets pulled back in.
+
 Both this map and the national map share the same Opportunity Score color
 scale (`SCORE_COLORSCALE` in `app.py`) so a color always means the same
 score across both — a light-to-medium-blue sequential ramp, deliberately

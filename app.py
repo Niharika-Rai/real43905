@@ -888,23 +888,49 @@ than a custom-fit boundary for each one.
     ))
 
     # plot the same real Census counties listed in the table above directly
-    # on the map, at each county's approximate center (its bounding-box
-    # midpoint -- the same approximation counties_by_ring itself is built
-    # on), colored to match the ring they belong to so the list above and
-    # the map below visibly agree with each other
+    # on the map, colored to match the ring they belong to so the list above
+    # and the map below visibly agree with each other.
+    #
+    # counties_by_ring assigns each county to a tier by the distance from
+    # the metro center to the *nearest edge* of the county's bounding box
+    # (so a large county whose edge reaches into a ring still counts, even
+    # if most of its area doesn't) -- but a county's plotted position here
+    # is its bbox *midpoint*, which for a large county can be a very
+    # different distance away, landing the marker in a visually different
+    # ring than the one it was actually assigned to (or, for an outer-tier
+    # county, even outside the drawn ring map entirely). To keep the
+    # listing and the map always in agreement, a county's marker keeps its
+    # real compass bearing from the metro center but has its *radius*
+    # clamped into its assigned tier's [inner, outer) band whenever the
+    # raw bbox-midpoint distance would fall outside it.
     _cc = county_centroids()
     _county_coords = pd.Series(
         list(zip(_cc["lat"], _cc["lon"])), index=_cc["county"] + ", " + _cc["state"],
     )
     _county_coords = _county_coords[~_county_coords.index.duplicated()]
+
+    def _clamp_to_ring(lat: float, lon: float, lo: float, hi: float) -> tuple[float, float]:
+        dx_mi = (lon - row["lon"]) * MILES_PER_DEGREE_LAT * _lon_scale
+        dy_mi = (lat - row["lat"]) * MILES_PER_DEGREE_LAT
+        raw_mi = math.hypot(dx_mi, dy_mi)
+        if lo <= raw_mi < hi:
+            return lat, lon
+        angle = math.atan2(dy_mi, dx_mi) if raw_mi > 0 else math.pi / 4
+        target_mi = (lo + hi) / 2
+        new_lon = row["lon"] + (target_mi * math.cos(angle)) / (MILES_PER_DEGREE_LAT * _lon_scale)
+        new_lat = row["lat"] + (target_mi * math.sin(angle)) / MILES_PER_DEGREE_LAT
+        return new_lat, new_lon
+
     for tier in reversed(SUBAREA_TIERS):
         tier_row = by_tier.loc[tier]
         ring_color = pcolors.sample_colorscale(SCORE_COLORSCALE, [tier_row["opportunity_score"] / 100])[0]
         names = [n for n in county_lists.get(tier, []) if n in _county_coords.index]
         if not names:
             continue
-        pts_lat = [_county_coords[n][0] for n in names]
-        pts_lon = [_county_coords[n][1] for n in names]
+        lo, hi = county_bounds[tier]
+        clamped = [_clamp_to_ring(*_county_coords[n], lo, hi) for n in names]
+        pts_lat = [c[0] for c in clamped]
+        pts_lon = [c[1] for c in clamped]
         # a crowded ring (common for a dense metro's outer rings) skips the
         # always-on text labels so they don't pile into an unreadable mess --
         # the county is still plotted and still fully named on hover
