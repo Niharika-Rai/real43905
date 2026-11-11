@@ -43,6 +43,7 @@ from finance import (
 )
 from pipeline.fetch_mortgage_rates import get_live_rates_partial, FALLBACK_RATES, FALLBACK_RATES_AS_OF
 from report import build_pdf_report
+from underwriting import run_underwriting
 
 DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "metro_dataset.csv")
 
@@ -326,7 +327,8 @@ with tab_map:
     st.subheader("Opportunity Score by Metro")
     st.caption(
         "Bubble size = population, color = Opportunity Score. Hover a metro "
-        "for its score breakdown."
+        "for its score breakdown, or click one to jump straight to it in "
+        "the Metro Breakdown tab."
     )
     fig = go.Figure()
     for ring in national_background_rings():
@@ -338,6 +340,10 @@ with tab_map:
             showlegend=False, hoverinfo="skip",
         ))
 
+    # the bubble trace's position among fig's traces so a later click event's
+    # curve_number can be checked against it -- clicks on a background state
+    # polygon (an earlier trace) should never be treated as a metro pick
+    marker_curve_number = len(fig.data)
     max_pop = scored["population"].max()
     fig.add_trace(go.Scattergeo(
         lat=scored["lat"], lon=scored["lon"], mode="markers",
@@ -376,12 +382,40 @@ with tab_map:
         height=640, margin=dict(l=0, r=0, t=10, b=0),
         paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
     )
-    st.plotly_chart(fig, use_container_width=True, theme=None)
+    map_event = st.plotly_chart(
+        fig, use_container_width=True, theme=None,
+        on_select="rerun", selection_mode="points", key="national_map_chart",
+    )
+
+    # click-to-navigate: a freshly clicked bubble pre-selects that metro in
+    # the Metro Breakdown tab's dropdown. Streamlit's selection state
+    # persists across reruns, so this only fires on a genuinely NEW click
+    # (tracked via _last_map_click) -- otherwise an unrelated rerun (e.g.
+    # moving a sidebar slider) would keep stomping on a metro the user
+    # picked manually from the dropdown afterward. Streamlit has no public
+    # API to also switch which tab is visually active, so the handoff is
+    # "click here, then open Metro Breakdown" rather than a single jump --
+    # see the README for that limitation.
+    clicked_points = (map_event.selection.get("points") if map_event and map_event.selection else []) or []
+    bubble_points = [p for p in clicked_points if p.get("curve_number") == marker_curve_number]
+    if bubble_points:
+        clicked_idx = bubble_points[0].get("point_index")
+        if clicked_idx is not None and 0 <= clicked_idx < len(scored):
+            clicked_metro = scored.iloc[clicked_idx]["metro"]
+            if st.session_state.get("_last_map_click") != clicked_metro:
+                st.session_state["_last_map_click"] = clicked_metro
+                st.session_state["metro_choice_select"] = clicked_metro
+            st.success(
+                f"**{clicked_metro}** selected -- open the **Metro Breakdown** tab to see it.",
+                icon="📍",
+            )
 
 # ---------------------------------------------------------- metro breakdown --
 with tab_breakdown:
     st.subheader("Per-Metro Score Breakdown")
-    metro_choice = st.selectbox("Choose a metro", options=scored["metro"].tolist())
+    metro_choice = st.selectbox(
+        "Choose a metro", options=scored["metro"].tolist(), key="metro_choice_select",
+    )
     row = scored[scored["metro"] == metro_choice].iloc[0]
 
     with st.expander("✏️ Override land & hard costs for this metro", expanded=False):
@@ -529,6 +563,110 @@ with tab_breakdown:
     ]
     detail = row[detail_cols].to_frame(name="value")
     st.dataframe(detail, use_container_width=True)
+
+    st.divider()
+    st.subheader("Full Underwriting: IRR & Debt Sizing")
+    st.caption(
+        "Turns the Feasibility screen above into a simplified pro forma: how "
+        "much debt a lender would size against this deal, how much equity "
+        "that leaves to raise, and the resulting levered return over a hold "
+        "period. Illustrative screening math, not a lender's term sheet or a "
+        "substitute for a full multi-year operating budget -- a real deal "
+        "still needs an actual lender quote and a licensed appraisal."
+    )
+
+    with st.expander("Underwriting assumptions", expanded=False):
+        uw_c1, uw_c2, uw_c3, uw_c4 = st.columns(4)
+        hold_years = uw_c1.slider(
+            "Hold period (years)", 3, 10, 5, key=f"uw_hold_{metro_choice}",
+        )
+        noi_growth_pct = uw_c1.slider(
+            "NOI growth (%/yr)", 0.0, 5.0, 2.0, step=0.25, key=f"uw_noigrow_{metro_choice}",
+        )
+        exit_cap_spread_bps = uw_c2.slider(
+            "Exit cap spread (bps vs. going-in)", -100, 200, 25, step=5,
+            key=f"uw_capspread_{metro_choice}",
+            help="Added to this metro's current cap rate to get the exit cap rate used to value the sale.",
+        )
+        selling_cost_pct = uw_c2.slider(
+            "Selling costs at exit (%)", 0.0, 8.0, 3.0, step=0.5, key=f"uw_sellcost_{metro_choice}",
+        )
+        dscr_target = uw_c3.slider(
+            "Target DSCR", 1.00, 1.75, 1.25, step=0.05, key=f"uw_dscr_{metro_choice}",
+            help="Minimum debt-service coverage ratio a lender requires: NOI must exceed debt service by this multiple.",
+        )
+        max_ltv_pct = uw_c3.slider(
+            "Max LTV (%)", 40.0, 85.0, 70.0, step=5.0, key=f"uw_ltv_{metro_choice}",
+        )
+        loan_rate_pct = uw_c4.slider(
+            "Loan rate (%)", 3.0, 10.0, 6.5, step=0.125, key=f"uw_loanrate_{metro_choice}",
+        )
+        loan_term_years = uw_c4.slider(
+            "Amortization (years)", 15, 35, 30, step=5, key=f"uw_loanterm_{metro_choice}",
+        )
+
+    exit_cap_rate_pct = max(row["cap_rate_pct"] + exit_cap_spread_bps / 100.0, 0.5)
+    uw = run_underwriting(
+        noi_usd=row["noi_usd"],
+        development_cost_usd=row["development_cost_per_unit_usd"],
+        cap_rate_pct=row["cap_rate_pct"],
+        hold_years=hold_years,
+        noi_growth_pct=noi_growth_pct,
+        exit_cap_rate_pct=exit_cap_rate_pct,
+        selling_cost_pct=selling_cost_pct,
+        dscr_target=dscr_target,
+        max_ltv_pct=max_ltv_pct,
+        loan_rate_pct=loan_rate_pct,
+        loan_term_years=loan_term_years,
+    )
+
+    uw_m1, uw_m2, uw_m3, uw_m4 = st.columns(4)
+    uw_m1.metric(
+        "Loan Amount (/unit)", f"${uw.debt.loan_amount_usd:,.0f}",
+        f"{uw.debt.binding_constraint}-constrained",
+    )
+    uw_m2.metric("Equity Required (/unit)", f"${uw.debt.equity_required_usd:,.0f}")
+    uw_m3.metric(
+        f"{hold_years}-Year Levered IRR",
+        f"{uw.irr_pct:.1f}%" if uw.irr_pct is not None else "N/A",
+    )
+    uw_m4.metric(
+        "Equity Multiple",
+        f"{uw.equity_multiple:.2f}x" if uw.equity_multiple is not None else "N/A",
+    )
+    st.caption(
+        f"Debt sized at a {dscr_target:.2f}&times; DSCR and {max_ltv_pct:.0f}% max LTV on a "
+        f"{loan_rate_pct:.3f}% / {loan_term_years}-year loan -- whichever constraint binds "
+        f"tighter sets the loan amount. Exit value applies a "
+        f"{exit_cap_rate_pct:.2f}% cap rate ({exit_cap_spread_bps:+d} bps vs. today's "
+        f"{row['cap_rate_pct']:.2f}% going-in rate) to the NOI one year past the hold period, "
+        "the standard forward-NOI convention for pricing a sale."
+    )
+
+    cf_rows = [
+        {
+            "Year": y.year,
+            "NOI": y.noi_usd,
+            "Debt Service": -y.debt_service_usd,
+            "Net Sale Proceeds": y.net_sale_proceeds_usd,
+            "Total Cash Flow to Equity": uw.equity_cash_flows[y.year],
+        }
+        for y in uw.schedule
+    ]
+    cf_table = pd.DataFrame(cf_rows)
+    st.dataframe(
+        cf_table, use_container_width=True, hide_index=True,
+        column_config={
+            c: st.column_config.NumberColumn(c, format="$%,.0f")
+            for c in cf_table.columns if c != "Year"
+        },
+    )
+    st.caption(
+        f"Year 0 (not shown above): equity outlay of "
+        f"${uw.debt.equity_required_usd:,.0f} per unit. Net Sale Proceeds is nonzero "
+        f"only in the exit year ({hold_years}), after paying selling costs and the "
+        f"remaining loan balance."
+    )
 
     st.divider()
     st.subheader(f"Zoom In: Sub-Metro Rings within {metro_choice}")
