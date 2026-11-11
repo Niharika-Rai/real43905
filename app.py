@@ -18,7 +18,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from metros import metros_frame
-from pipeline.geo_shapes import state_rings, national_background_rings, counties_by_ring, county_centroids
+from pipeline.geo_shapes import state_rings, national_background_rings, counties_by_ring, county_centroids, home_county
 from pipeline.synthetic import DENSITY_TIERS, AMI_TIERS_PCT, DEFAULT_AMI_TIER_PCT
 from pipeline.subareas import (
     generate_subarea_dataset,
@@ -908,6 +908,14 @@ than a custom-fit boundary for each one.
         list(zip(_cc["lat"], _cc["lon"])), index=_cc["county"] + ", " + _cc["state"],
     )
     _county_coords = _county_coords[~_county_coords.index.duplicated()]
+    # the metro's home county (the one actually containing its coordinate --
+    # e.g. Santa Clara County for San Jose) is already marked by the star
+    # above; counties_by_ring guarantees it a spot in the Urban Core text
+    # list, but plotting it a second time as its own dot would double-label
+    # the same real-world location and make it look like two different
+    # places, so it's skipped here (still shown normally in the ring's text
+    # list below, just not as a redundant on-map marker).
+    _home = home_county(row["lat"], row["lon"])
 
     def _clamp_to_ring(lat: float, lon: float, lo: float, hi: float) -> tuple[float, float]:
         dx_mi = (lon - row["lon"]) * MILES_PER_DEGREE_LAT * _lon_scale
@@ -924,7 +932,7 @@ than a custom-fit boundary for each one.
     for tier in reversed(SUBAREA_TIERS):
         tier_row = by_tier.loc[tier]
         ring_color = pcolors.sample_colorscale(SCORE_COLORSCALE, [tier_row["opportunity_score"] / 100])[0]
-        names = [n for n in county_lists.get(tier, []) if n in _county_coords.index]
+        names = [n for n in county_lists.get(tier, []) if n in _county_coords.index and n != _home]
         if not names:
             continue
         lo, hi = county_bounds[tier]

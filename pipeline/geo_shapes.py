@@ -136,7 +136,7 @@ def _county_geometries() -> list[dict]:
 
     Unlike `county_centroids()` (bbox-midpoint only, used for the coarser
     ring-distance bucketing below), this keeps the actual polygon rings so
-    `_home_county()` can test true point-in-polygon containment -- the
+    `home_county()` can test true point-in-polygon containment -- the
     bbox-midpoint approximation is specifically unreliable for large or
     oddly-shaped counties, which is exactly when a metro's own "home"
     county would otherwise wrongly drop out of the Urban Core ring.
@@ -172,7 +172,7 @@ def _point_in_ring(lon: float, lat: float, ring: list[tuple[float, float]]) -> b
     return inside
 
 
-def _home_county(lat: float, lon: float) -> str | None:
+def home_county(lat: float, lon: float) -> str | None:
     """The one county whose boundary actually contains (lat, lon), if any.
 
     Checked via true point-in-polygon, not distance to an approximate
@@ -215,7 +215,7 @@ def counties_by_ring(
     geometry dependency. On top of that, the one county whose boundary
     *actually contains* the metro's own point (almost always its "home"
     county -- e.g. Santa Clara County for San Jose) is found via exact
-    point-in-polygon (_home_county) and guaranteed a spot in the ring
+    point-in-polygon (home_county) and guaranteed a spot in the ring
     covering distance 0, even on the rare case a bbox-edge distance alone
     would disagree.
     """
@@ -228,7 +228,7 @@ def counties_by_ring(
         sel = df[(df["dist_mi"] >= lo) & (df["dist_mi"] < hi)]
         out[tier] = sorted({f"{r.county}, {r.state}" for r in sel.itertuples()})
 
-    home = _home_county(center_lat, center_lon)
+    home = home_county(center_lat, center_lon)
     if home is not None:
         zero_tier = next((tier for tier, (lo, _hi) in ring_bounds.items() if lo == 0), None)
         if zero_tier is not None:
