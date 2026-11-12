@@ -124,8 +124,8 @@ two things a lender and an equity investor actually size a deal on:
   present value -- no new dependency, just `finance.monthly_payment` reused
   for the loan constant and a repaid-balance formula for the payoff.
 
-All seven assumptions (hold period, NOI growth, exit cap spread, selling
-costs, target DSCR, max LTV, loan rate/amortization) are adjustable in an
+All eight assumptions (hold period, NOI growth, exit cap spread, selling
+costs, target DSCR, max LTV, loan rate, amortization) are adjustable in an
 expander, each keyed per metro (`uw_hold_{metro}`, etc.) so an override made
 while looking at one metro stays scoped to that metro -- switching to a
 different metro you haven't touched shows that slider's default again,
@@ -163,6 +163,22 @@ has traded roughly 7.5-11%+ through 2025-2026 (permanent agency/bank/life-co
 debt has mostly run 5.3-7% over the same period) -- the previous 10% cap cut
 off part of that real bridge-debt range. Both ranges are sourced in the
 sliders' own tooltips in the app.
+
+Every one of the eight underwriting sliders carries a `help` tooltip (the
+"?" icon next to its label) explaining what the assumption means and the
+real-world range/market data behind its bounds -- not just Max LTV and loan
+rate. Hold period's tooltip notes the 3-10 year institutional norm and the
+15-year LIHTC compliance period (often a 30-year extended-use restriction
+on top) that's specific to affordable deals; NOI growth's covers the
+long-run ~2-4%/yr norm against the much wider swings actually observed
+single-year (e.g. 2021's post-pandemic rent surge, 2023's flat-to-negative
+overbuilt-Sunbelt-metro years); exit cap spread's covers the usual 0-100
+bps base case and up to 150-200 bps conservative case; selling costs'
+covers typical 1-3% brokerage plus 2-5% all-in closing costs, with the
+6-8% upper end reflecting high-transfer-tax markets; target DSCR's cites
+the same 2025 HUD rule change (1.11x affordable, 1.15x market-rate) against
+the 1.20-1.35x conventional norm; and amortization's covers the 25-30 year
+conventional norm against HUD-insured loans' extension to 35-40 years.
 
 ### Map click-to-navigate
 
