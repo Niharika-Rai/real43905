@@ -22,10 +22,17 @@ from finance import monthly_payment
 def remaining_balance(
     principal: float, annual_rate_pct: float, term_years: int, years_elapsed: float
 ) -> float:
-    """Outstanding principal on a standard amortizing loan after `years_elapsed` years."""
+    """Outstanding principal on a standard amortizing loan after `years_elapsed` years.
+
+    `years_elapsed` can exceed `term_years` (the hold period and the loan's
+    own amortization term are independent sliders -- a short-amortization
+    loan can easily be fully paid off before a long hold period ends), in
+    which case the loan is simply retired and owes nothing from that point
+    on, same as in reality.
+    """
     r = (annual_rate_pct / 100.0) / 12
     n = term_years * 12
-    k = years_elapsed * 12
+    k = min(years_elapsed * 12, n)
     if principal <= 0:
         return 0.0
     if r == 0:

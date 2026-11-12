@@ -126,12 +126,26 @@ two things a lender and an equity investor actually size a deal on:
 
 All seven assumptions (hold period, NOI growth, exit cap spread, selling
 costs, target DSCR, max LTV, loan rate/amortization) are adjustable in an
-expander, keyed per metro so switching metros resets them to sensible
-defaults rather than carrying over a previous metro's overrides. Like the
-rest of the Feasibility side, this is illustrative screening math -- a real
-deal still needs an actual lender term sheet and a licensed appraisal, and
-the README's existing disclaimer about synthetic cost inputs applies here
-too, since development cost and NOI feed directly into it.
+expander, each keyed per metro (`uw_hold_{metro}`, etc.) so an override made
+while looking at one metro stays scoped to that metro -- switching to a
+different metro you haven't touched shows that slider's default again,
+rather than silently carrying over and distorting a different metro's
+numbers. Hold period (1-20 years) and amortization (1-40 years) intentionally
+share the same starting point and a wide range, rather than two different,
+narrower bands (the hold period used to start at 3, amortization at 15), so
+neither looks more "standard" than the other and a user is free to model an
+unusually short or long hold or loan term. Because those two are independent
+sliders, a hold period can validly run past a loan's own amortization term
+(e.g. a 20-year hold on a 1-year loan) -- `remaining_balance()` in
+`underwriting.py` clamps the elapsed-time input to the loan's own term in
+that case, so the loan is simply treated as paid off (0 remaining balance)
+rather than running the amortization formula past its domain, which would
+otherwise produce a nonsensical negative "balance" (and, through the exit-year
+payoff subtraction, an inflated IRR). Like the rest of the Feasibility side,
+this is illustrative screening math -- a real deal still needs an actual
+lender term sheet and a licensed appraisal, and the README's existing
+disclaimer about synthetic cost inputs applies here too, since development
+cost and NOI feed directly into it.
 
 ### Map click-to-navigate
 
