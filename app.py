@@ -202,7 +202,7 @@ scored = score_metros(
 data_vintage = raw["data_vintage"].iloc[0] if "data_vintage" in raw.columns else "unknown"
 
 # ------------------------------------------------------------------ header --
-st.title("\U0001F3D8️ Affordable Housing Opportunity Explorer")
+st.title("Affordable Housing Opportunity Explorer")
 st.markdown(
     "Ranks U.S. metro areas by an **Opportunity Score** that combines a "
     "**Shortage Score** (how undersupplied a metro is) and a **Feasibility "
@@ -527,6 +527,14 @@ if active_section == "breakdown":
         fig_s = go.Figure(go.Bar(x=shortage_components["z_score"], y=shortage_components["component"], orientation="h"))
         fig_s.update_layout(height=280, margin=dict(l=0, r=0, t=10, b=0), xaxis_title="z-score")
         st.plotly_chart(fig_s, use_container_width=True)
+        st.caption(
+            "Each bar is this metro's z-score on that component -- how many "
+            "standard deviations above (positive) or below (negative) the "
+            "150-metro average, not a raw unit. A longer bar means that "
+            "component is pushing this metro's Shortage Score up further "
+            "relative to other metros; all four combine into the Shortage "
+            "Score shown above."
+        )
 
     with col_b:
         st.markdown("**Feasibility waterfall ($/unit)**")
@@ -763,7 +771,7 @@ if active_section == "breakdown":
                 orientation="h",
                 marker=dict(
                     color=subarea_scored["opportunity_score"],
-                    colorscale="RdYlGn", cmin=0, cmax=100,
+                    colorscale=SCORE_COLORSCALE, cmin=0, cmax=100,
                 ),
             )
         )
