@@ -147,6 +147,23 @@ lender term sheet and a licensed appraisal, and the README's existing
 disclaimer about synthetic cost inputs applies here too, since development
 cost and NOI feed directly into it.
 
+**Max LTV and loan rate bounds, grounded in real lending programs.** Max LTV
+runs 50-90% (default 70%), not the previous 40-85%: HUD raised its FHA
+221(d)(4)/223(f) *affordable*-housing max loan-to-cost/LTV to 90% in 2025
+(Mortgagee Letter 2025-03, also dropping the required DSCR to 1.11x for that
+tier) -- directly relevant to an app this project calls the *Affordable*
+Housing Opportunity Explorer. Conventional bank/agency execution for
+market-rate deals typically runs 65-80% LTV, so a 40% floor was unrealistically
+low for a lender-imposed cap (that's a sponsor choosing very low leverage
+voluntarily, not a cap a lender would actually set); 50% is a more realistic
+floor for an unusually conservative cap. Loan rate runs 3-12% (default 6.5%):
+3% reflects the 2021 ultra-low-rate era for agency permanent multifamily debt,
+and the new 12% ceiling (up from 10%) covers bridge/transitional debt, which
+has traded roughly 7.5-11%+ through 2025-2026 (permanent agency/bank/life-co
+debt has mostly run 5.3-7% over the same period) -- the previous 10% cap cut
+off part of that real bridge-debt range. Both ranges are sourced in the
+sliders' own tooltips in the app.
+
 ### Map click-to-navigate
 
 Clicking a bubble on the national map (`st.plotly_chart`'s `on_select`

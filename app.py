@@ -630,10 +630,18 @@ if active_section == "breakdown":
             help="Minimum debt-service coverage ratio a lender requires: NOI must exceed debt service by this multiple.",
         )
         max_ltv_pct = uw_c3.slider(
-            "Max LTV (%)", 40.0, 85.0, 70.0, step=5.0, key=f"uw_ltv_{metro_choice}",
+            "Max LTV (%)", 50.0, 90.0, 70.0, step=5.0, key=f"uw_ltv_{metro_choice}",
+            help="HUD raised its FHA 221(d)(4)/223(f) affordable-housing max to 90% LTC/LTV "
+                 "in 2025 (Mortgagee Letter 2025-03); conventional bank/agency execution "
+                 "typically runs 65-80%. 50% is a realistic floor for an unusually "
+                 "conservative lender cap, not just a sponsor choosing low leverage.",
         )
         loan_rate_pct = uw_c4.slider(
-            "Loan rate (%)", 3.0, 10.0, 6.5, step=0.125, key=f"uw_loanrate_{metro_choice}",
+            "Loan rate (%)", 3.0, 12.0, 6.5, step=0.125, key=f"uw_loanrate_{metro_choice}",
+            help="3% reflects the 2021 ultra-low-rate era for agency permanent debt; "
+                 "12% covers bridge/transitional debt, which has run roughly 7.5-11%+ "
+                 "(sometimes higher) through 2025-2026 while permanent agency/bank debt "
+                 "has run closer to 5.5-7%.",
         )
         loan_term_years = uw_c4.slider(
             "Amortization (years)", 1, 40, 30, step=1, key=f"uw_loanterm_{metro_choice}",
