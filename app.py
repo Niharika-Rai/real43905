@@ -613,21 +613,48 @@ if active_section == "breakdown":
         uw_c1, uw_c2, uw_c3, uw_c4 = st.columns(4)
         hold_years = uw_c1.slider(
             "Hold period (years)", 1, 20, 5, key=f"uw_hold_{metro_choice}",
+            help="How long the property is held before the modeled sale in the exit year. "
+                 "Institutional multifamily hold periods typically run 3-10 years (5-7 is a "
+                 "common base case); affordable deals financed with Low-Income Housing Tax "
+                 "Credits carry a mandatory 15-year compliance period (often a 30-year "
+                 "extended-use restriction on top of that in many states), which is why the "
+                 "range runs all the way to 20.",
         )
         noi_growth_pct = uw_c1.slider(
             "NOI growth (%/yr)", 0.0, 5.0, 2.0, step=0.25, key=f"uw_noigrow_{metro_choice}",
+            help="Annual growth applied to NOI every year of the hold, compounding. "
+                 "Long-run U.S. apartment rent/NOI growth has averaged roughly 2-4%/yr, "
+                 "though actual single years swing far outside that (national asking rents "
+                 "grew roughly 14% in 2021's post-pandemic surge, then were flat to slightly "
+                 "negative in several overbuilt Sunbelt metros in 2023); 2-4% is the "
+                 "defensible long-run planning assumption, not a single-year forecast.",
         )
         exit_cap_spread_bps = uw_c2.slider(
             "Exit cap spread (bps vs. going-in)", -100, 200, 25, step=5,
             key=f"uw_capspread_{metro_choice}",
-            help="Added to this metro's current cap rate to get the exit cap rate used to value the sale.",
+            help="Added to this metro's current cap rate to get the exit cap rate used to "
+                 "value the sale. Underwriting convention is usually a positive spread (cap "
+                 "rates drift up over a hold, discounting the exit value) of roughly 0-100 "
+                 "bps for a base case, with up to 150-200 bps for a conservative/stress case; "
+                 "a negative spread models cap-rate compression (the exit buyer pays a lower "
+                 "cap than today's), which is a real but less commonly underwritten scenario.",
         )
         selling_cost_pct = uw_c2.slider(
             "Selling costs at exit (%)", 0.0, 8.0, 3.0, step=0.5, key=f"uw_sellcost_{metro_choice}",
+            help="Brokerage commission plus closing costs (and transfer taxes where they "
+                 "apply), netted against the exit sale price. Typically 1-3% for brokerage "
+                 "alone; total all-in costs commonly land 2-5%, with the upper end of this "
+                 "range (6-8%) covering high-transfer-tax markets (e.g. NYC, Chicago) or a "
+                 "smaller deal with proportionally higher closing costs.",
         )
         dscr_target = uw_c3.slider(
             "Target DSCR", 1.00, 1.75, 1.25, step=0.05, key=f"uw_dscr_{metro_choice}",
-            help="Minimum debt-service coverage ratio a lender requires: NOI must exceed debt service by this multiple.",
+            help="Minimum debt-service coverage ratio a lender requires: NOI must exceed debt "
+                 "service by this multiple. HUD's 2025 FHA rule change (Mortgagee Letter "
+                 "2025-03) lowered the required DSCR to 1.11x for affordable-housing "
+                 "221(d)(4)/223(f) loans and 1.15x for market-rate; conventional bank/agency "
+                 "execution typically still asks for 1.20-1.35x, with up to 1.50x+ for a "
+                 "conservative or higher-risk-asset lender.",
         )
         max_ltv_pct = uw_c3.slider(
             "Max LTV (%)", 50.0, 90.0, 70.0, step=5.0, key=f"uw_ltv_{metro_choice}",
@@ -645,6 +672,13 @@ if active_section == "breakdown":
         )
         loan_term_years = uw_c4.slider(
             "Amortization (years)", 1, 40, 30, step=1, key=f"uw_loanterm_{metro_choice}",
+            help="How many years the loan's payment schedule assumes it would take to fully "
+                 "pay off principal (not necessarily the same as the hold period -- see "
+                 "Hold period above). Conventional bank/agency multifamily loans typically "
+                 "amortize over 25-30 years; HUD-insured FHA loans can extend to 35-40 years, "
+                 "the longest commonly available. A short amortization (toward the low end) "
+                 "models a bridge/interest-only-style loan that pays down principal fast "
+                 "relative to its balance.",
         )
 
     exit_cap_rate_pct = max(row["cap_rate_pct"] + exit_cap_spread_bps / 100.0, 0.5)
