@@ -23,6 +23,16 @@ def test_remaining_balance_decreases_over_time():
     assert 0 < bal_15 < bal_5 < 300_000
 
 
+def test_remaining_balance_past_term_is_zero_not_negative():
+    # hold period and amortization term are independent sliders -- a loan
+    # that fully amortizes well before a long hold period ends should just
+    # be retired (0 owed), not run the formula past its own term and come
+    # out negative.
+    assert remaining_balance(300_000, 6.5, 1, 20) == pytest.approx(0.0, abs=0.01)
+    assert remaining_balance(300_000, 6.5, 5, 20) == pytest.approx(0.0, abs=0.01)
+    assert remaining_balance(300_000, 0.0, 1, 20) == pytest.approx(0.0, abs=0.01)
+
+
 def test_size_debt_picks_the_tighter_constraint():
     # a small NOI relative to a large development cost should be DSCR-bound
     debt = size_debt(noi_usd=5_000, development_cost_usd=300_000, dscr_target=1.25, max_ltv_pct=70.0)

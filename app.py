@@ -612,7 +612,7 @@ if active_section == "breakdown":
     with st.expander("Underwriting assumptions", expanded=False):
         uw_c1, uw_c2, uw_c3, uw_c4 = st.columns(4)
         hold_years = uw_c1.slider(
-            "Hold period (years)", 3, 10, 5, key=f"uw_hold_{metro_choice}",
+            "Hold period (years)", 1, 20, 5, key=f"uw_hold_{metro_choice}",
         )
         noi_growth_pct = uw_c1.slider(
             "NOI growth (%/yr)", 0.0, 5.0, 2.0, step=0.25, key=f"uw_noigrow_{metro_choice}",
@@ -636,7 +636,7 @@ if active_section == "breakdown":
             "Loan rate (%)", 3.0, 10.0, 6.5, step=0.125, key=f"uw_loanrate_{metro_choice}",
         )
         loan_term_years = uw_c4.slider(
-            "Amortization (years)", 15, 35, 30, step=5, key=f"uw_loanterm_{metro_choice}",
+            "Amortization (years)", 1, 40, 30, step=1, key=f"uw_loanterm_{metro_choice}",
         )
 
     exit_cap_rate_pct = max(row["cap_rate_pct"] + exit_cap_spread_bps / 100.0, 0.5)
