@@ -520,6 +520,31 @@ render.yaml                  Render Blueprint (web service + optional weekly ref
 requirements.txt
 ```
 
+## Performance
+
+Two app-level choices keep interactions fast without caching anything that
+would go stale:
+
+- **Navigation runs only the active section's code.** The six top-level
+  sections (Ranked Table, Map, Metro Breakdown, Metro Comparison, Buy-Down
+  Calculator, Data Sources) are built on `st.segmented_control` behind
+  `if active_section == "...":` branches, not `st.tabs()`. Streamlit's
+  `st.tabs()` runs the code inside *every* tab's `with tab:` block on *every*
+  rerun regardless of which tab is visually active (it only hides the
+  others with CSS) -- so with six tabs, every slider drag or button click
+  used to re-run all six sections' worth of chart-building and data work,
+  not just the one you were looking at. The `if`/`elif` structure skips the
+  other five outright.
+- **`scored_metros()` caches the full 150-metro scoring pass.** `score_metros()`
+  (shortage -> feasibility -> opportunity, z-scored across all 150 metros)
+  is a pure function of the sidebar's Model Controls -- it has no randomness
+  or I/O -- but most reruns (picking a different metro, dragging an
+  underwriting slider, adding a metro to the comparison shortlist) don't
+  touch those controls at all. `app.py`'s `scored_metros()` wraps it in
+  `st.cache_data`, keyed on the exact weight/tier/alpha values passed in, so
+  those reruns hit the cache instead of recomputing the full pipeline over
+  all 150 rows every time.
+
 ## Running locally
 
 ```bash
