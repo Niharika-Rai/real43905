@@ -93,6 +93,39 @@ def load_data() -> pd.DataFrame:
     return df.merge(ref, on="cbsa", how="left")
 
 
+@st.cache_data(show_spinner=False)
+def scored_metros(
+    raw_df: pd.DataFrame,
+    shortage_weights: dict,
+    feasibility_weights: dict,
+    ami_tier_pct: float,
+    density_tier: str,
+    unit_size_sf: float,
+    soft_cost_pct: float,
+    alpha: float,
+) -> pd.DataFrame:
+    """Cached wrapper around score_metros for the full 150-metro table.
+
+    score_metros is a pure function of these exact arguments (no randomness,
+    no I/O), so re-running the whole 150-row Shortage -> Feasibility ->
+    Opportunity pipeline is wasted work on every rerun that doesn't touch
+    the sidebar's Model Controls -- which is most reruns (picking a metro,
+    dragging an underwriting slider, adding to comparison, etc. all trigger
+    a full script rerun but leave these arguments unchanged). Caching keyed
+    on the exact argument values turns those into a cache hit instead.
+    """
+    return score_metros(
+        raw_df,
+        shortage_weights=shortage_weights,
+        feasibility_weights=feasibility_weights,
+        ami_tier_pct=ami_tier_pct,
+        density_tier=density_tier,
+        unit_size_sf=unit_size_sf,
+        soft_cost_pct=soft_cost_pct,
+        alpha=alpha,
+    )
+
+
 @st.cache_data(ttl=86_400, show_spinner=False)
 def get_rate_presets(_cache_date: str) -> tuple[dict[str, float], dict[str, str], str | None]:
     """Today's benchmark note rates by loan type, refreshed once a day.
@@ -188,7 +221,7 @@ raw = load_data()
 raw = raw.sort_values("population", ascending=False).reset_index(drop=True)
 n_metros = len(raw)
 
-scored = score_metros(
+scored = scored_metros(
     raw,
     shortage_weights=shortage_weights,
     feasibility_weights=feasibility_weights,
